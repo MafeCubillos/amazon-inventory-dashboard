@@ -27,7 +27,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-SHEET_ID    = "10ED9_5s_UY_y2Eqs3LAt4xgyJaVQCIkqyAMYsfgnicI"
+SHEET_ID    = os.getenv("GOOGLE_SHEET_ID", "10ED9_5s_UY_y2Eqs3LAt4xgyJaVQCIkqyAMYsfgnicI")
 IGNORE_TABS = {"inputs crec mom"}
 
 COUNTRY_MAP: dict[str, str] = {
