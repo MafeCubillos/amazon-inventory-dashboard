@@ -59,7 +59,10 @@ st.set_page_config(
 
 # ── Demo mode ──────────────────────────────────────────────────
 _SB_URL = os.getenv("SUPABASE_URL", "")
-_SB_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+_SB_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")   # bypasses RLS — preferred for internal dashboard
+    or os.getenv("SUPABASE_ANON_KEY", "")
+)
 DEMO_MODE = not (_SB_URL and _SB_KEY)
 
 db = None
