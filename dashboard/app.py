@@ -610,7 +610,7 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
                 + td("", right=True)   # On order is EU-level only, blank per country
                 + td(f'{c["vel"]:.1f}', right=True)
                 + td("")
-                + td(f'{c["units_30d"]:,}', right=True)
+                + td(f'{c.get("units_30d", 0):,}', right=True)
                 + td(fmt_days(c["days_left"]), style=dsc, right=True)
                 + td(f'€{c["value"]:,.0f}', right=True)
                 + td(status_dot(c["status"]), style="text-align:center")
