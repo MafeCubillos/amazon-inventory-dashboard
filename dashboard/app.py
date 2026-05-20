@@ -58,10 +58,20 @@ st.set_page_config(
 )
 
 # ── Demo mode ──────────────────────────────────────────────────
-_SB_URL = os.getenv("SUPABASE_URL", "")
+def _get_secret(key: str, default: str = "") -> str:
+    """Read from st.secrets first (Streamlit Cloud), fall back to os.environ (.env)."""
+    try:
+        val = st.secrets.get(key)
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return os.getenv(key, default)
+
+_SB_URL = _get_secret("SUPABASE_URL")
 _SB_KEY = (
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")   # bypasses RLS — preferred for internal dashboard
-    or os.getenv("SUPABASE_ANON_KEY", "")
+    _get_secret("SUPABASE_SERVICE_ROLE_KEY")   # bypasses RLS — preferred for internal dashboard
+    or _get_secret("SUPABASE_ANON_KEY")
 )
 DEMO_MODE = not (_SB_URL and _SB_KEY)
 
@@ -70,7 +80,10 @@ if not DEMO_MODE:
     from supabase import create_client
     @st.cache_resource
     def _get_db():
-        return create_client(_SB_URL, _SB_KEY)
+        return create_client(
+            _get_secret("SUPABASE_URL"),
+            _get_secret("SUPABASE_SERVICE_ROLE_KEY") or _get_secret("SUPABASE_ANON_KEY"),
+        )
     db = _get_db()
 
 MARKETPLACES = ["ES", "FR", "DE", "IT"]
