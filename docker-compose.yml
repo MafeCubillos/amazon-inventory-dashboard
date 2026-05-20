@@ -1,0 +1,34 @@
+version: "3.9"
+
+# ── Shared environment ─────────────────────────────────────────
+x-env: &env
+  env_file:
+    - .env
+
+services:
+
+  # Background sync scheduler (runs every 6h)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m backend.scheduler
+    <<: *env
+    restart: unless-stopped
+    volumes:
+      - .:/app
+
+  # Streamlit dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    <<: *env
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    depends_on:
+      - scheduler

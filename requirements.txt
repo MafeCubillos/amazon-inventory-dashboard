@@ -1,0 +1,25 @@
+# SP-API
+python-amazon-sp-api>=0.19.14
+
+# Database
+supabase>=2.3.0
+
+# Scheduler
+APScheduler>=3.10.4
+
+# Dashboard
+streamlit>=1.32.0
+plotly>=5.20.0
+openpyxl>=3.1.2
+
+# Data
+pandas>=2.2.0
+
+# Google Sheets (Forecast)
+gspread>=6.0.0
+google-auth>=2.28.0
+
+# Utilities
+python-dotenv>=1.0.1
+requests>=2.31.0
+tenacity>=8.2.3
