@@ -21,9 +21,9 @@ import streamlit as st
 
 # ── Load secrets into os.environ (Streamlit Cloud uses st.secrets) ──────────
 try:
-    for _k, _v in st.secrets.items():
-        if isinstance(_v, str) and _k not in os.environ:
-            os.environ[_k] = _v
+    for _k, _v in st.secrets.to_dict().items():
+        if isinstance(_v, str):
+            os.environ[_k] = _v   # cloud secrets always take priority
 except Exception:
     pass  # local dev uses .env via load_dotenv()
 import streamlit.components.v1 as components
