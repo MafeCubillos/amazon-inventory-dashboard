@@ -14,19 +14,19 @@ logger = logging.getLogger(__name__)
 
 # ── SP-API credentials ────────────────────────────────────────
 SP_API_CREDENTIALS = {
-    "lwa_app_id":       os.environ["LWA_APP_ID"],
-    "lwa_client_secret": os.environ["LWA_CLIENT_SECRET"],
-    "refresh_token":    os.environ["SP_API_REFRESH_TOKEN"],
-    "aws_access_key":   os.environ["AWS_ACCESS_KEY_ID"],
-    "aws_secret_key":   os.environ["AWS_SECRET_ACCESS_KEY"],
+    "lwa_app_id":        os.getenv("LWA_APP_ID", ""),
+    "lwa_client_secret": os.getenv("LWA_CLIENT_SECRET", ""),
+    "refresh_token":     os.getenv("SP_API_REFRESH_TOKEN", ""),
+    "aws_access_key":    os.getenv("AWS_ACCESS_KEY_ID", ""),
+    "aws_secret_key":    os.getenv("AWS_SECRET_ACCESS_KEY", ""),
 }
 
-SELLER_ID = os.environ["SELLER_ID"]
+SELLER_ID = os.getenv("SELLER_ID", "")
 
 # ── Supabase ──────────────────────────────────────────────────
-SUPABASE_URL             = os.environ["SUPABASE_URL"]
-SUPABASE_ANON_KEY        = os.environ["SUPABASE_ANON_KEY"]
-SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_URL              = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY         = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 # ── EU marketplace IDs ────────────────────────────────────────
 MARKETPLACES: dict[str, str] = {
