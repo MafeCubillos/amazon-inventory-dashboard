@@ -11,7 +11,8 @@ from backend.config import SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROL
 
 logger = logging.getLogger(__name__)
 
-db: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+_anon_key = SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY
+db: Client = create_client(SUPABASE_URL, _anon_key)
 db_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 
