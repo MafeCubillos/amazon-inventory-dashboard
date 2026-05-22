@@ -1,0 +1,32 @@
+name: Inventory Alert Email
+
+on:
+  schedule:
+    # Every Monday and Thursday at 8:00 AM UTC
+    - cron: '0 8 * * 1'   # Monday
+    - cron: '0 8 * * 4'   # Thursday
+  workflow_dispatch:       # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install supabase python-dotenv
+
+      - name: Send alert email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+        run: python -c "from backend.alerts import send_alert_email; send_alert_email()"
