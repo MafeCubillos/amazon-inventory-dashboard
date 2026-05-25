@@ -31,4 +31,11 @@ jobs:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
-        run: python -c "from backend.alerts import send_alert_email; send_alert_email()"
+        run: |
+          python -c "
+          import sys, logging
+          logging.basicConfig(level=logging.INFO)
+          from backend.alerts import send_alert_email
+          ok = send_alert_email()
+          sys.exit(0 if ok else 1)
+          "

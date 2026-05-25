@@ -155,11 +155,16 @@ def _build_html(rows: list[dict]) -> str:
 
 # ── Send ───────────────────────────────────────────────────────────────────
 
+def _clean(s: str) -> str:
+    """Remove embedded newlines/CR that break email headers."""
+    return s.replace("\r", "").replace("\n", "").strip()
+
+
 def send_alert_email() -> bool:
     """Build and send the alert email. Returns True on success."""
-    smtp_from = os.getenv("ALERT_EMAIL_FROM", "").strip()
-    smtp_pass = os.getenv("ALERT_EMAIL_PASSWORD", "").strip()
-    smtp_to   = [t.strip() for t in os.getenv("ALERT_EMAIL_TO", "").split(",") if t.strip()]
+    smtp_from = _clean(os.getenv("ALERT_EMAIL_FROM", ""))
+    smtp_pass = _clean(os.getenv("ALERT_EMAIL_PASSWORD", ""))
+    smtp_to   = [_clean(t) for t in os.getenv("ALERT_EMAIL_TO", "").replace("\n", ",").split(",") if _clean(t)]
 
     if not (smtp_from and smtp_pass and smtp_to):
         logger.warning("alerts  email not configured — set ALERT_EMAIL_FROM/PASSWORD/TO in .env")
