@@ -2,10 +2,12 @@ name: Inventory Alert Email
 
 on:
   schedule:
-    # Every Monday and Thursday at 8:00 AM UTC
-    - cron: '0 8 * * 1'   # Monday
-    - cron: '0 8 * * 4'   # Thursday
-  workflow_dispatch:       # Allow manual trigger from GitHub Actions tab
+    # Every Monday and Thursday at 8:17 AM UTC
+    # NOTE: GitHub Actions delays/skips cron jobs scheduled on the hour due to
+    # high load. Using off-hour minutes (e.g. 17) makes runs much more reliable.
+    - cron: '17 8 * * 1'   # Monday
+    - cron: '17 8 * * 4'   # Thursday
+  workflow_dispatch:        # Allow manual trigger from GitHub Actions tab
 
 jobs:
   send-alert:
