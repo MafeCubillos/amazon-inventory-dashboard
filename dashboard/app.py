@@ -422,14 +422,16 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
         "asin,marketplace,days_of_stock_left,days_until_reorder,alert_status,suggested_reorder_qty"
     ).execute().data or []
 
-    # Load latest sales velocity
+    # Load latest sales velocity — must order by date and keep most recent
+    # per (asin, marketplace), otherwise stale historical rows can shadow today's value.
     vel_raw = db.table("sales_velocity").select(
-        "asin,marketplace,velocity_daily"
-    ).execute().data or []
-    vel_idx: dict[tuple, float] = {
-        (r["asin"], r["marketplace"]): float(r.get("velocity_daily") or 0)
-        for r in vel_raw
-    }
+        "asin,marketplace,velocity_daily,period_end_date"
+    ).order("period_end_date", desc=True).execute().data or []
+    vel_idx: dict[tuple, float] = {}
+    for r in vel_raw:
+        key = (r["asin"], r["marketplace"])
+        if key not in vel_idx:    # first hit is the most recent (desc order)
+            vel_idx[key] = float(r.get("velocity_daily") or 0)
 
     # Forecast-based velocity (next 3 months from Google Sheets)
     fcst_vel_idx = _forecast_vel_per_country()
