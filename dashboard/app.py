@@ -351,10 +351,15 @@ def _forecast_vel_per_country() -> dict[tuple, float]:
     if not fcst or "_error" in fcst:
         return {}
 
-    # Build the 3 month keys starting from current month: e.g. ['2026-05','2026-06','2026-07']
+    # Build the 3 month keys skipping the current month: e.g. in May → ['2026-06','2026-07','2026-08']
+    # Rationale: supplier lead time is 65-70 days, so the next 3 FUTURE months are what
+    # matters for purchasing decisions; the current month is already half-consumed.
     today = date.today()
     months_keys = []
-    y, m = today.year, today.month
+    y, m = today.year, today.month + 1
+    if m > 12:
+        m = 1
+        y += 1
     for _ in range(3):
         months_keys.append(f"{y:04d}-{m:02d}")
         m += 1
