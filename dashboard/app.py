@@ -7,7 +7,7 @@ import os
 import json
 import math
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # Ensure project root is on the path so `backend` is always importable
@@ -338,6 +338,49 @@ def _demo_sync_log() -> list[dict]:
 # ══════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=300)
+def _forecast_vel_per_country() -> dict[tuple, float]:
+    """Daily velocity per (asin, marketplace) based on next 3 months of forecast.
+
+    Returns empty dict if forecast unavailable. Falls back to 0 for missing ASINs.
+    Used to compute the "Vel/day (3m)" and "Days left (3m)" columns.
+    """
+    try:
+        fcst = load_forecast()
+    except Exception:
+        return {}
+    if not fcst or "_error" in fcst:
+        return {}
+
+    # Build the 3 month keys starting from current month: e.g. ['2026-05','2026-06','2026-07']
+    today = date.today()
+    months_keys = []
+    y, m = today.year, today.month
+    for _ in range(3):
+        months_keys.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    result: dict[tuple, float] = {}
+    for asin, info in fcst.items():
+        if not isinstance(info, dict) or "data" not in info:
+            continue
+        df = info["data"]
+        for mp in ["ES", "FR", "DE", "IT"]:
+            if mp not in df.columns:
+                continue
+            units = 0.0
+            for mk in months_keys:
+                if mk in df.index:
+                    try:
+                        units += float(df.loc[mk, mp])
+                    except Exception:
+                        pass
+            result[(asin, mp)] = units / 90.0
+    return result
+
+
 def load_master(warn_buffer: int = 15) -> list[dict]:
     if DEMO_MODE:
         return _demo_master(warn_buffer)
@@ -388,6 +431,9 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
         for r in vel_raw
     }
 
+    # Forecast-based velocity (next 3 months from Google Sheets)
+    fcst_vel_idx = _forecast_vel_per_country()
+
     # Index by (asin, marketplace) — keep most recent inventory
     inv_idx: dict[tuple, dict] = {}
     for r in inv_raw:
@@ -409,6 +455,7 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
         countries = []
         total_avail = total_inbound = 0
         total_vel   = 0.0
+        total_vel_fcst = 0.0
         total_value = 0.0
         worst       = "ok"
 
@@ -420,7 +467,9 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
             avail   = int(inv.get("units_available") or 0)
             inbound = int(inv.get("units_inbound") or 0)
             vel     = vel_idx.get(key, 0.0)
+            vel_fcst = fcst_vel_idx.get(key, 0.0)
             days    = float(alert.get("days_of_stock_left") or (avail / vel if vel > 0 else 9999.0))
+            days_fcst = round(avail / vel_fcst, 1) if vel_fcst > 0 else 9999.0
             status  = alert.get("alert_status") or (
                 "critical" if days < lead else ("warning" if days < lead + warn_buffer else "ok")
             )
@@ -432,17 +481,21 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
 
             units_30d_mp = round(vel * 30)
             countries.append({"mp": mp, "flag": FLAGS[mp], "avail": avail, "inbound": 0,
-                               "vel": round(vel, 1), "days_left": round(days, 1), "value": value,
-                               "status": status, "reorder_qty": reorder,
+                               "vel": round(vel, 1), "vel_fcst": round(vel_fcst, 1),
+                               "days_left": round(days, 1), "days_left_fcst": days_fcst,
+                               "value": value, "status": status, "reorder_qty": reorder,
                                "units_30d": int(units_30d_mp)})
 
-            total_avail   += avail
-            total_inbound  = max(total_inbound, inbound)  # EU total only at product level
-            total_vel     += vel
-            total_value   += value
+            total_avail    += avail
+            total_inbound   = max(total_inbound, inbound)  # EU total only at product level
+            total_vel      += vel
+            total_vel_fcst += vel_fcst
+            total_value    += value
 
-        avg_vel    = round(total_vel / 4, 1)
-        total_days = round(total_avail / avg_vel, 1) if avg_vel > 0 else 9999.0
+        avg_vel         = round(total_vel / 4, 1)
+        avg_vel_fcst    = round(total_vel_fcst / 4, 1)
+        total_days      = round(total_avail / avg_vel, 1) if avg_vel > 0 else 9999.0
+        total_days_fcst = round(total_avail / avg_vel_fcst, 1) if avg_vel_fcst > 0 else 9999.0
         trend      = "flat"
         on_order   = po_on_order.get(asin, 0)   # units ordered from supplier, not yet at FBA
 
@@ -450,7 +503,8 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
                      "cogs": cogs, "lead": lead, "target": target,
                      "total_avail": total_avail, "total_inbound": total_inbound,
                      "on_order": on_order,
-                     "avg_vel": avg_vel, "total_days": total_days,
+                     "avg_vel": avg_vel, "avg_vel_fcst": avg_vel_fcst,
+                     "total_days": total_days, "total_days_fcst": total_days_fcst,
                      "total_value": round(total_value, 2), "worst": worst, "trend": trend,
                      "sparkline": [], "countries": countries})
     return rows
@@ -549,15 +603,18 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
         ("Units",           "72px",  True),
         ("On order",        "72px",  True),
         ("Vel/day",         "68px",  True),
+        ("Vel/day (3m)",    "76px",  True),
         ("",                "36px",  True),   # trend
         ("30d sales",       "72px",  True),
         ("Days left",       "80px",  True),
+        ("Days left (3m)",  "90px",  True),
         ("Stock €",         "82px",  True),
         ("Alert",           "62px",  True),
         ("",                "30px",  True),   # expand
     ]
 
-    SORTABLE = {"Units": "units", "30d sales": "sales", "Days left": "days", "Stock €": "stock"}
+    SORTABLE = {"Units": "units", "30d sales": "sales",
+                "Days left": "days", "Days left (3m)": "daysfcst", "Stock €": "stock"}
 
     ths = ""
     for label, width, right in COLS:
@@ -576,6 +633,7 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
     for ri, r in enumerate(filtered):
         pid  = f"p{ri}"
         ds         = days_style(r["total_days"])
+        ds_fcst    = days_style(r.get("total_days_fcst", 9999))
         units_30d  = sum(c["vel"] * 30 for c in r["countries"])
 
         def td(content, style="", right=False):
@@ -598,9 +656,11 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
                 right=True
               )
             + td(f'{r["avg_vel"]:.1f}', right=True)
+            + td(f'<span style="color:#7A2FBF;font-weight:600">{r.get("avg_vel_fcst",0):.1f}</span>', right=True)
             + td(trend_html(r["trend"]), style="text-align:center")
             + td(f'{int(units_30d):,}', right=True)
             + td(fmt_days(r["total_days"]), style=ds, right=True)
+            + td(fmt_days(r.get("total_days_fcst", 9999)), style=ds_fcst, right=True)
             + td(f'€{r["total_value"]:,.0f}', right=True)
             + td(mp_status_dots(r["countries"]), style="text-align:center")
             + td(f'<span id="btn-{pid}" style="display:inline-flex;align-items:center;'
@@ -608,16 +668,21 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
                  f'background:#F0F0F0;font-size:9px;color:#555;cursor:pointer;'
                  f'user-select:none">▶</span>', style="text-align:center;cursor:pointer")
         )
-        days_val = r["total_days"] if r["total_days"] < 9999 else 999999
+        days_val      = r["total_days"]      if r["total_days"]      < 9999 else 999999
+        days_fcst_val = r.get("total_days_fcst", 9999)
+        days_fcst_val = days_fcst_val if days_fcst_val < 9999 else 999999
         body += (f'<tr class="mr" data-pid="{pid}" '
-                 f'data-units="{r["total_avail"]}" data-sales="{int(units_30d)}" data-days="{days_val}" data-stock="{r["total_value"]}" '
+                 f'data-units="{r["total_avail"]}" data-sales="{int(units_30d)}" '
+                 f'data-days="{days_val}" data-daysfcst="{days_fcst_val}" '
+                 f'data-stock="{r["total_value"]}" '
                  f'style="cursor:pointer;border-bottom:1px solid #F0F0F0;background:{"#FFFFFF" if ri%2==0 else "#FAFAFA"}">'
                  f'{cells}</tr>\n')
 
         for c in r["countries"]:
             if active_mps and c["mp"] not in active_mps:
                 continue
-            dsc = days_style(c["days_left"])
+            dsc      = days_style(c["days_left"])
+            dsc_fcst = days_style(c.get("days_left_fcst", 9999))
             sub_cells = (
                 td(f'<span style="font-size:12px;font-weight:600;color:#444">'
                    f'{c["flag"]} {c["mp"]}</span>', style="padding-left:26px")
@@ -625,9 +690,11 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
                 + td(f'{c["avail"]:,}', right=True)
                 + td("", right=True)   # On order is EU-level only, blank per country
                 + td(f'{c["vel"]:.1f}', right=True)
+                + td(f'<span style="color:#7A2FBF">{c.get("vel_fcst",0):.1f}</span>', right=True)
                 + td("")
                 + td(f'{c.get("units_30d", 0):,}', right=True)
                 + td(fmt_days(c["days_left"]), style=dsc, right=True)
+                + td(fmt_days(c.get("days_left_fcst", 9999)), style=dsc_fcst, right=True)
                 + td(f'€{c["value"]:,.0f}', right=True)
                 + td(status_dot(c["status"]), style="text-align:center")
                 + td("")
@@ -637,7 +704,7 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
                      f'font-size:12px">{sub_cells}</tr>\n')
 
     if not filtered:
-        body = ('<tr><td colspan="10" style="text-align:center;padding:48px;'
+        body = ('<tr><td colspan="13" style="text-align:center;padding:48px;'
                 'color:#888;font-size:14px">No products match the current filters.</td></tr>')
 
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
