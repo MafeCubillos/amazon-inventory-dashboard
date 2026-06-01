@@ -386,6 +386,7 @@ def _forecast_vel_per_country() -> dict[tuple, float]:
     return result
 
 
+@st.cache_data(ttl=300)
 def load_master(warn_buffer: int = 15) -> list[dict]:
     if DEMO_MODE:
         return _demo_master(warn_buffer)
