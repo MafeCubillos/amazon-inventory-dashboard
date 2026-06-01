@@ -500,8 +500,12 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
             total_vel_fcst += vel_fcst
             total_value    += value
 
-        avg_vel         = round(total_vel / 4, 1)
-        avg_vel_fcst    = round(total_vel_fcst / 4, 1)
+        # Product-level velocity = sum across all 4 countries (total EU daily sales).
+        # This matches the semantics of the inventory total (also a sum) and the
+        # 30d sales column (also a sum). Previously we divided by 4 which made
+        # the product-row "Days left" 4× too optimistic.
+        avg_vel         = round(total_vel, 1)
+        avg_vel_fcst    = round(total_vel_fcst, 1)
         total_days      = round(total_avail / avg_vel, 1) if avg_vel > 0 else 9999.0
         total_days_fcst = round(total_avail / avg_vel_fcst, 1) if avg_vel_fcst > 0 else 9999.0
         trend      = "flat"
