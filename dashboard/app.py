@@ -1020,6 +1020,39 @@ def _save_pos(rows_to_upsert: list[dict]) -> bool:
         return False
 
 
+def _dedupe_pos() -> tuple[int, int]:
+    """Delete duplicate POs (same po_number + asin), keeping the lowest id.
+
+    Returns (kept_count, deleted_count). Rows with empty po_number are skipped
+    so legitimately-blank rows aren't merged.
+    """
+    from supabase import create_client as _cc
+    adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+    pos = adm.table("purchase_orders").select("id,po_number,asin").execute().data or []
+
+    groups: dict[tuple, list[int]] = {}
+    for p in pos:
+        po_num = (p.get("po_number") or "").strip()
+        asin   = (p.get("asin") or "").strip()
+        if not po_num:
+            continue
+        groups.setdefault((po_num, asin), []).append(int(p["id"]))
+
+    to_delete: list[int] = []
+    for ids in groups.values():
+        if len(ids) > 1:
+            to_delete.extend(sorted(ids)[1:])   # keep the lowest id
+
+    if to_delete:
+        # Supabase has a 100-row limit per .in_() — chunk to be safe
+        for i in range(0, len(to_delete), 100):
+            chunk = to_delete[i:i + 100]
+            adm.table("purchase_orders").delete().in_("id", chunk).execute()
+
+    return (len(pos) - len(to_delete), len(to_delete))
+
+
 def render_orders_page(inventory_rows: list[dict]):
     from datetime import date as _date
     import io as _io
@@ -1137,7 +1170,28 @@ def render_orders_page(inventory_rows: list[dict]):
                 num_rows="fixed",
             )
 
-            if st.button("💾 Save changes", type="primary", key="save_po_edits"):
+            action_c1, action_c2 = st.columns([1, 5])
+            with action_c2:
+                if st.button("🧹 Remove duplicates", key="dedupe_pos_btn",
+                             help="Delete duplicate POs (same PO# + same ASIN). Keeps the oldest one."):
+                    with st.spinner("Scanning for duplicates…"):
+                        try:
+                            kept, removed = _dedupe_pos()
+                        except Exception as e:
+                            st.error(f"Dedupe failed: {e}")
+                            removed = 0
+                            kept = len(pos)
+                    if removed > 0:
+                        st.success(f"Removed {removed} duplicate POs · {kept} remaining")
+                        load_master.clear()
+                        st.rerun()
+                    else:
+                        st.info("No duplicates found.")
+
+            with action_c1:
+                save_clicked = st.button("💾 Save changes", type="primary", key="save_po_edits")
+
+            if save_clicked:
                 to_save = []
                 for i, row in edited.iterrows():
                     to_save.append({
