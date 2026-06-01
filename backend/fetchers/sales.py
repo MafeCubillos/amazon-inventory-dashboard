@@ -132,13 +132,18 @@ def _parse_and_aggregate(report_text: str, today: date) -> pd.DataFrame:
 
 def fetch_sales_for_marketplace(marketplace_code: str) -> int:
     today = date.today()
-    start = today - timedelta(days=30)
+    # Amazon's Sales & Traffic Report has ~48h reporting lag.
+    # End the window 2 days ago to ensure complete data, then label it as
+    # the "30-day" window. Start = end - 29 → exactly 30 days inclusive.
+    end   = today - timedelta(days=2)
+    start = end   - timedelta(days=29)
     mp_enum = _MARKETPLACE_ENUM[marketplace_code]
 
     api = Reports(credentials=SP_API_CREDENTIALS, marketplace=mp_enum)
 
-    logger.info("sales  %s  creating report %s → %s", marketplace_code, start, today)
-    report_id = _create_report(api, start, today)
+    logger.info("sales  %s  creating report %s → %s (30d window, ends 2d ago to avoid lag)",
+                marketplace_code, start, end)
+    report_id = _create_report(api, start, end)
     doc_id    = _poll_report(api, report_id)
     tsv_text  = _download_report(api, doc_id)
 
