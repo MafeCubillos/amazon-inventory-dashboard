@@ -1075,20 +1075,21 @@ def _load_label_stock() -> dict[str, dict]:
         return {}
 
 
-def _save_label_stock(asin: str, current_units: int, notes: str = "") -> bool:
-    """Upsert the current stock for one ASIN."""
+def _save_label_stock(asin: str, current_units: int,
+                      moq: int | None = None, notes: str = "") -> bool:
+    """Upsert the current stock (and optionally MOQ) for one ASIN."""
     try:
         from supabase import create_client as _cc
         adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-        adm.table("label_stock").upsert(
-            {
-                "asin":          asin,
-                "current_units": int(current_units),
-                "notes":         notes or None,
-                "updated_at":    datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="asin",
-        ).execute()
+        payload = {
+            "asin":          asin,
+            "current_units": int(current_units),
+            "notes":         notes or None,
+            "updated_at":    datetime.now(timezone.utc).isoformat(),
+        }
+        if moq is not None:
+            payload["moq"] = int(moq)
+        adm.table("label_stock").upsert(payload, on_conflict="asin").execute()
         return True
     except Exception as e:
         st.error(f"Save failed: {e}")
@@ -1096,38 +1097,51 @@ def _save_label_stock(asin: str, current_units: int, notes: str = "") -> bool:
 
 
 def compute_label_runway(asin: str, current_units: int, pos: list[dict],
-                         lead_days: int = 21) -> dict:
+                         lead_days: int = 21, moq: int = 1000,
+                         buffer_pct: int = 20) -> dict:
     """For one ASIN, walk through OPEN POs (anything not yet received) and find
-    the first label shortfall.
+    the first label shortfall, including a safety buffer.
 
-    `current_units` is the physical label count at the user's warehouse RIGHT
-    NOW. Any PO that is draft/ordered/shipped will still consume labels from
-    that warehouse stock in the future. Only `received` POs have already
-    consumed their labels.
-
-    The deadline to reorder labels = first-shortfall PO date − lead_days,
-    floored to today if that date is in the past ("ASAP").
+    Safety buffer  = max(committed × buffer_pct%, moq)
+    Required stock = committed + safety_buffer
     Status:
-      - critical  if deadline within 7 days (or past, or already in shortfall)
-      - warning   if deadline within lead_days
-      - ok        otherwise
+      🔴 critical  — stock can't cover committed POs (deadline within 7d)
+      🟡 warning   — covers committed but buffer is breached (within lead_days)
+      🟢 ok        — covers committed + buffer
+
+    The deadline to reorder labels = first PO date where running stock drops
+    below the safety buffer, minus lead_days. Floored to today if that's in
+    the past ("ASAP").
     """
     OPEN_STATUSES = ("draft", "ordered", "shipped")
 
     asin_pos = [p for p in pos if p.get("asin") == asin]
-    drafts = sorted(
+    open_pos = sorted(
         [p for p in asin_pos if p.get("status") in OPEN_STATUSES],
         key=lambda p: (p.get("po_date") or "9999-12-31"),
     )
-    committed = sum(int(p.get("units_ordered") or 0) for p in drafts)
+    committed = sum(int(p.get("units_ordered") or 0) for p in open_pos)
+    safety_buffer = max(int(round(committed * buffer_pct / 100)), int(moq or 0))
+    required = committed + safety_buffer
 
-    running            = current_units
-    next_deadline      = None
-    deadline_po        = None
-    deadline_shortfall = 0
-    walkthrough        = []
+    today_d = date.today()
+    running = current_units
+    walkthrough = []
 
-    for po in drafts:
+    # Track the first PO that pushes us below the safety buffer (warning level)
+    # and the first PO that pushes us below zero (critical level), independently.
+    warn_deadline_po   = None
+    warn_deadline_date = None
+    crit_deadline_po   = None
+    crit_deadline_date = None
+    crit_shortfall     = 0
+
+    def _deadline(po_date_obj):
+        if po_date_obj:
+            return max(po_date_obj - timedelta(days=lead_days), today_d)
+        return today_d
+
+    for po in open_pos:
         units       = int(po.get("units_ordered") or 0)
         po_date_str = po.get("po_date")
         po_date_obj = None
@@ -1136,54 +1150,62 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
                 po_date_obj = date.fromisoformat(str(po_date_str)[:10])
             except Exception:
                 pass
+        po_num      = po.get("po_number") or "(no #)"
+        new_running = running - units
 
-        if running >= units:
-            running -= units
-            walkthrough.append({
-                "po_number": po.get("po_number") or "(no #)",
-                "po_date":   po_date_obj,
-                "units":     units,
-                "ok":        True,
-                "after":     running,
-            })
-        else:
-            shortfall = units - running
-            today_d   = date.today()
-            if po_date_obj:
-                raw_order_by = po_date_obj - timedelta(days=lead_days)
-                # If the deadline is already in the past, surface it as today (ASAP)
-                order_by = max(raw_order_by, today_d)
-            else:
-                order_by = today_d   # no date → assume ASAP
-            if next_deadline is None or order_by < next_deadline:
-                next_deadline      = order_by
-                deadline_po        = po.get("po_number") or "(no #)"
-                deadline_shortfall = shortfall
-            walkthrough.append({
-                "po_number": po.get("po_number") or "(no #)",
-                "po_date":   po_date_obj,
-                "units":     units,
-                "ok":        False,
-                "shortfall": shortfall,
-                "order_by":  order_by,
-            })
-            running = 0   # all stock consumed by partial fulfillment
+        if new_running < 0 and crit_deadline_date is None:
+            crit_deadline_date = _deadline(po_date_obj)
+            crit_deadline_po   = po_num
+            crit_shortfall     = -new_running
+        if new_running < safety_buffer and warn_deadline_date is None:
+            warn_deadline_date = _deadline(po_date_obj)
+            warn_deadline_po   = po_num
 
-    today = date.today()
-    if next_deadline is None:
-        status = "ok" if current_units >= 0 else "warning"
-    elif next_deadline <= today + timedelta(days=7):
+        walkthrough.append({
+            "po_number":    po_num,
+            "po_date":      po_date_obj,
+            "units":        units,
+            "remaining":    max(new_running, 0),
+            "below_buffer": new_running < safety_buffer,
+            "short":        new_running < 0,
+        })
+        running = max(new_running, 0)
+
+    # If we have no open POs but current stock is already below the buffer,
+    # we should still warn (e.g. 500 labels on hand, MOQ = 1000)
+    if not open_pos and current_units < safety_buffer and safety_buffer > 0:
+        warn_deadline_date = today_d
+        warn_deadline_po   = "(buffer)"
+
+    # Choose the actionable deadline shown to the user. Critical wins if present;
+    # otherwise the warning (buffer) deadline.
+    next_deadline      = crit_deadline_date or warn_deadline_date
+    deadline_po        = crit_deadline_po   or warn_deadline_po
+    # Shortfall to display: amount needed to restore buffer fully.
+    after_open_pos     = current_units - committed
+    deadline_shortfall = max(safety_buffer - after_open_pos, 0)
+
+    # Status
+    if crit_deadline_date is not None and crit_deadline_date <= today_d + timedelta(days=7):
         status = "critical"
-    elif next_deadline <= today + timedelta(days=lead_days):
+    elif (crit_deadline_date is not None
+          and crit_deadline_date <= today_d + timedelta(days=lead_days)):
         status = "warning"
+    elif warn_deadline_date is not None and warn_deadline_date <= today_d + timedelta(days=lead_days):
+        status = "warning"
+    elif crit_deadline_date is not None or warn_deadline_date is not None:
+        status = "ok"   # deadline exists but it's far away
     else:
         status = "ok"
 
     return {
         "asin":               asin,
         "current_units":      current_units,
+        "moq":                int(moq or 0),
         "committed":          committed,
-        "after_drafts":       current_units - committed,
+        "safety_buffer":      safety_buffer,
+        "required":           required,
+        "after_open_pos":     after_open_pos,
         "next_deadline":      next_deadline,
         "deadline_po":        deadline_po,
         "deadline_shortfall": deadline_shortfall,
@@ -1209,6 +1231,8 @@ def render_labels_page(inventory_rows: list[dict]):
         return
 
     lead_days  = int(st.session_state.get("label_lead_days", 21))
+    buffer_pct = int(st.session_state.get("label_buffer_pct", 20))
+    default_moq = 1000
     stock_map  = _load_label_stock()
     pos        = _load_pos()
     asin_name  = {r["asin"]: r["name"] for r in inventory_rows}
@@ -1218,8 +1242,10 @@ def render_labels_page(inventory_rows: list[dict]):
     # Compute runway per ASIN
     runways = []
     for asin in all_asins:
-        cur = int((stock_map.get(asin, {}) or {}).get("current_units") or 0)
-        runways.append(compute_label_runway(asin, cur, pos, lead_days))
+        row = stock_map.get(asin, {}) or {}
+        cur = int(row.get("current_units") or 0)
+        moq = int(row.get("moq") if row.get("moq") is not None else default_moq)
+        runways.append(compute_label_runway(asin, cur, pos, lead_days, moq, buffer_pct))
     runways_by_asin = {r["asin"]: r for r in runways}
 
     # ── Summary cards ─────────────────────────────────────────
@@ -1282,38 +1308,52 @@ def render_labels_page(inventory_rows: list[dict]):
     # ── Tab 1: Editable overview ──────────────────────────────
     with t_view:
         st.caption(
-            "Edit **Current units** inline, then click **Save**. "
-            "Other columns are computed automatically from your draft POs."
+            f"Edit **Current units** and **MOQ** inline, then click **Save**. "
+            f"Required = committed + max(committed × {buffer_pct}%, MOQ). "
+            f"Buffer % is configurable in Settings."
         )
         rows_view = []
         for r in runways:
             rows_view.append({
-                "ASIN":               r["asin"],
-                "Product":            asin_name.get(r["asin"], r["asin"])[:55],
-                "Current units":      int(r["current_units"]),
+                "ASIN":                 r["asin"],
+                "Product":              asin_name.get(r["asin"], r["asin"])[:55],
+                "Current units":        int(r["current_units"]),
+                "MOQ":                  int(r["moq"]),
                 "Committed (open POs)": int(r["committed"]),
-                "After open POs":       int(r["after_drafts"]),
-                "Next deadline":      r["next_deadline"] if r["next_deadline"] else None,
-                "Status":             {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
+                "Required":             int(r["required"]),
+                "After open POs":       int(r["after_open_pos"]),
+                "Net vs required":      int(r["current_units"] - r["required"]),
+                "Next deadline":        r["next_deadline"] if r["next_deadline"] else None,
+                "Status":               {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
             })
         df_view = pd.DataFrame(rows_view)
 
         edited = st.data_editor(
             df_view,
             column_config={
-                "ASIN":               st.column_config.TextColumn("ASIN", disabled=True),
-                "Product":            st.column_config.TextColumn("Product", disabled=True,
-                                                                  width="large"),
-                "Current units":      st.column_config.NumberColumn(
-                                          "Current units", min_value=0, step=100,
-                                          help="Labels you have on hand right now."),
+                "ASIN":                 st.column_config.TextColumn("ASIN", disabled=True),
+                "Product":              st.column_config.TextColumn("Product", disabled=True,
+                                                                    width="large"),
+                "Current units":        st.column_config.NumberColumn(
+                                            "Current units", min_value=0, step=100,
+                                            help="Labels you have on hand right now."),
+                "MOQ":                  st.column_config.NumberColumn(
+                                            "MOQ (bottles)", min_value=0, step=100,
+                                            help="Minimum order quantity from your bottle supplier."),
                 "Committed (open POs)": st.column_config.NumberColumn(
-                                          "Committed (open POs)", disabled=True),
+                                            "Committed (open POs)", disabled=True),
+                "Required":             st.column_config.NumberColumn(
+                                            "Required", disabled=True,
+                                            help=f"committed + max(committed × {buffer_pct}%, MOQ)"),
                 "After open POs":       st.column_config.NumberColumn(
-                                          "After open POs", disabled=True),
-                "Next deadline":      st.column_config.DateColumn(
-                                          "Next deadline", disabled=True),
-                "Status":             st.column_config.TextColumn("Status", disabled=True),
+                                            "After open POs", disabled=True,
+                                            help="current − committed (raw leftover)"),
+                "Net vs required":      st.column_config.NumberColumn(
+                                            "Net vs required", disabled=True,
+                                            help="current − required (shortfall when negative)"),
+                "Next deadline":        st.column_config.DateColumn(
+                                            "Next deadline", disabled=True),
+                "Status":               st.column_config.TextColumn("Status", disabled=True),
             },
             hide_index=True,
             use_container_width=True,
@@ -1321,13 +1361,15 @@ def render_labels_page(inventory_rows: list[dict]):
             num_rows="fixed",
         )
 
-        if st.button("💾 Save current units", type="primary", key="save_lbl_stock"):
+        if st.button("💾 Save changes", type="primary", key="save_lbl_stock"):
             saved = 0
             for i, row in edited.iterrows():
                 new_units = int(row["Current units"])
+                new_moq   = int(row["MOQ"])
                 old_units = int(df_view.iloc[i]["Current units"])
-                if new_units != old_units:
-                    if _save_label_stock(df_view.iloc[i]["ASIN"], new_units):
+                old_moq   = int(df_view.iloc[i]["MOQ"])
+                if new_units != old_units or new_moq != old_moq:
+                    if _save_label_stock(df_view.iloc[i]["ASIN"], new_units, moq=new_moq):
                         saved += 1
             if saved > 0:
                 st.success(f"Updated {saved} ASIN(s)")
@@ -1349,54 +1391,58 @@ def render_labels_page(inventory_rows: list[dict]):
             st.markdown(
                 f"**{asin_name.get(sel, sel)}** · "
                 f"Current **{r['current_units']:,}** · "
+                f"MOQ **{r['moq']:,}** · "
                 f"Committed **{r['committed']:,}** · "
-                f"After open POs **{r['after_drafts']:,}**"
+                f"Required **{r['required']:,}** · "
+                f"After open POs **{r['after_open_pos']:,}**"
             )
             if not r["walkthrough"]:
                 st.info("No open POs for this ASIN — nothing to plan against yet.")
             else:
                 walk = []
                 for step in r["walkthrough"]:
-                    if step["ok"]:
-                        walk.append({
-                            "PO #":      step["po_number"],
-                            "PO date":   step["po_date"] or "",
-                            "Units":     step["units"],
-                            "Outcome":   f"✅ OK · {step['after']:,} labels left after",
-                        })
+                    if step["short"]:
+                        outcome = (f"🔴 SHORT · {step['remaining']:,} left "
+                                   f"(below 0, can't fulfill)")
+                    elif step["below_buffer"]:
+                        outcome = (f"🟡 Below buffer · {step['remaining']:,} left "
+                                   f"(under safety threshold)")
                     else:
-                        walk.append({
-                            "PO #":      step["po_number"],
-                            "PO date":   step["po_date"] or "",
-                            "Units":     step["units"],
-                            "Outcome":   (f"⚠️ Short by {step['shortfall']:,} · "
-                                          f"order by {step['order_by'] or '?'}"),
-                        })
+                        outcome = f"🟢 OK · {step['remaining']:,} labels left after"
+                    walk.append({
+                        "PO #":    step["po_number"],
+                        "PO date": step["po_date"] or "",
+                        "Units":   step["units"],
+                        "Outcome": outcome,
+                    })
                 st.dataframe(pd.DataFrame(walk), use_container_width=True, hide_index=True)
 
     # ── Tab 3: Import CSV ─────────────────────────────────────
     with t_import:
         st.markdown(
-            "Upload a CSV with columns: `asin`, `current_units`. "
-            "Each row upserts that ASIN's label stock to the given count "
-            "(overwrites any previous value)."
+            "Upload a CSV with columns: `asin`, `current_units`, **and optionally** `moq`. "
+            "Each row upserts that ASIN's label stock (and MOQ if provided)."
         )
         uploaded = st.file_uploader("Pick a CSV file", type=["csv"], key="lbl_csv")
         if uploaded is not None:
             try:
                 df_imp = pd.read_csv(uploaded)
                 df_imp.columns = [c.strip().lower().replace(" ", "_") for c in df_imp.columns]
-                required = {"asin", "current_units"}
-                if not required.issubset(set(df_imp.columns)):
-                    st.error(f"CSV missing required columns: {required - set(df_imp.columns)}")
+                required_cols = {"asin", "current_units"}
+                if not required_cols.issubset(set(df_imp.columns)):
+                    st.error(f"CSV missing required columns: {required_cols - set(df_imp.columns)}")
                 else:
                     st.dataframe(df_imp.head(20), use_container_width=True)
                     if st.button("💾 Import all rows", type="primary", key="import_lbl_btn"):
                         saved = 0
                         for _, row in df_imp.iterrows():
+                            moq_val = (int(row["moq"])
+                                       if "moq" in df_imp.columns and pd.notna(row.get("moq"))
+                                       else None)
                             if _save_label_stock(
                                 str(row["asin"]).strip(),
                                 int(row["current_units"]),
+                                moq=moq_val,
                             ):
                                 saved += 1
                         st.success(f"Imported / updated {saved} ASINs.")
@@ -2488,29 +2534,42 @@ def render_settings():
 
     st.divider()
 
-    # ── Label lead time ──────────────────────────────────────
+    # ── Label inventory settings ─────────────────────────────
     with st.container(border=True):
-        st.markdown("**🏷️ Label inventory · supplier lead time**")
+        st.markdown("**🏷️ Label inventory**")
         st.caption(
-            "How many days from placing a label purchase order until labels arrive. "
-            "Used by the Labels page to compute when to reorder before draft POs."
+            "Lead time = days from placing a label purchase order until labels "
+            "arrive at your warehouse. Safety buffer % adds extra protection on "
+            "top of committed POs (combined with each ASIN's MOQ)."
         )
-        label_lead = st.number_input(
-            "Label lead time (days)", min_value=1, max_value=180,
-            value=int(st.session_state.label_lead_days),
-            step=1, key="label_lead_input",
-            help="Default 21 days (3 weeks).",
-        )
-        if st.button("✅ Apply label lead time", type="primary", key="apply_label_lead_btn"):
-            st.session_state.label_lead_days = int(label_lead)
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            label_lead = st.number_input(
+                "Label lead time (days)", min_value=1, max_value=180,
+                value=int(st.session_state.label_lead_days),
+                step=1, key="label_lead_input",
+                help="Default 21 days (3 weeks).",
+            )
+        with lc2:
+            buffer_pct = st.number_input(
+                "Safety buffer %", min_value=0, max_value=100,
+                value=int(st.session_state.label_buffer_pct),
+                step=5, key="label_buffer_input",
+                help=("Extra labels reserved on top of committed POs. "
+                      "Required = committed + max(committed × %, MOQ)."),
+            )
+        if st.button("✅ Apply label settings", type="primary", key="apply_label_lead_btn"):
+            st.session_state.label_lead_days  = int(label_lead)
+            st.session_state.label_buffer_pct = int(buffer_pct)
             st.rerun()
 
     st.divider()
     if st.button("↩️ Reset all to defaults", key="reset_settings_btn"):
-        st.session_state.warn_buffer     = 15
-        st.session_state.days_red        = 30
-        st.session_state.days_amber      = 60
-        st.session_state.label_lead_days = 21
+        st.session_state.warn_buffer      = 15
+        st.session_state.days_red         = 30
+        st.session_state.days_amber       = 60
+        st.session_state.label_lead_days  = 21
+        st.session_state.label_buffer_pct = 20
         load_master.clear()
         st.rerun()
 
@@ -2598,7 +2657,8 @@ render_sidebar()
 # Session state
 for k, v in [("mp_filter", list(MARKETPLACES)), ("alert_filter", ["critical","warning","ok"]),
               ("only_critical", False), ("warn_buffer", 15), ("days_red", 30), ("days_amber", 60),
-              ("asin_search", ""), ("page", "inventory"), ("label_lead_days", 21)]:
+              ("asin_search", ""), ("page", "inventory"),
+              ("label_lead_days", 21), ("label_buffer_pct", 20)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
