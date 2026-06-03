@@ -1055,78 +1055,70 @@ def _dedupe_pos() -> tuple[int, int]:
 
 
 # ══════════════════════════════════════════════════════════════
-# LABEL INVENTORY
+# LABEL INVENTORY  (simplified: one current count per ASIN, drafts deplete it)
 # ══════════════════════════════════════════════════════════════
 
-def _load_label_purchases() -> list[dict]:
-    """Return all label purchase rows. Empty list if table not yet created."""
+def _load_label_stock() -> dict[str, dict]:
+    """Return dict[asin] -> {current_units, updated_at, notes}.
+
+    Reads from the `label_stock` table (one row per ASIN). Returns empty dict
+    gracefully if the table doesn't exist yet.
+    """
     if DEMO_MODE:
-        return []
+        return {}
     try:
         from supabase import create_client as _cc
         adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-        return adm.table("label_purchases").select("*").order(
-            "purchase_date", desc=True
-        ).execute().data or []
+        rows = adm.table("label_stock").select("*").execute().data or []
+        return {r["asin"]: r for r in rows}
     except Exception:
-        return []   # table likely doesn't exist yet — return empty gracefully
+        return {}
 
 
-def _save_label_purchases(rows_to_upsert: list[dict]) -> bool:
+def _save_label_stock(asin: str, current_units: int, notes: str = "") -> bool:
+    """Upsert the current stock for one ASIN."""
     try:
         from supabase import create_client as _cc
         adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-        adm.table("label_purchases").upsert(rows_to_upsert).execute()
+        adm.table("label_stock").upsert(
+            {
+                "asin":          asin,
+                "current_units": int(current_units),
+                "notes":         notes or None,
+                "updated_at":    datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="asin",
+        ).execute()
         return True
     except Exception as e:
         st.error(f"Save failed: {e}")
         return False
 
 
-def _delete_label_purchase(purchase_id: int) -> bool:
-    try:
-        from supabase import create_client as _cc
-        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
-        adm.table("label_purchases").delete().eq("id", int(purchase_id)).execute()
-        return True
-    except Exception as e:
-        st.error(f"Delete failed: {e}")
-        return False
+def compute_label_runway(asin: str, current_units: int, pos: list[dict],
+                         lead_days: int = 21) -> dict:
+    """For one ASIN, walk through draft POs and find the first label shortfall.
 
-
-def compute_label_runway(asin: str, label_purchases: list[dict],
-                         pos: list[dict], lead_days: int = 21) -> dict:
-    """For one ASIN, compute label inventory status and next reorder deadline.
-
-    Consumed = ordered/shipped/received POs (labels already at the bottler).
-    Committed = draft POs (planned future bottle orders).
-
-    Walks draft POs in chronological order; when label stock can't cover a
-    draft PO, computes the deadline to order more labels as (PO date − lead_days).
+    The deadline to reorder labels = po_date − lead_days. Status:
+      - critical  if deadline within 7 days (or past)
+      - warning   if deadline within lead_days
+      - ok        otherwise (or no upcoming shortfall)
     """
-    purchased = sum(int(p.get("units_purchased") or 0)
-                    for p in label_purchases if p.get("asin") == asin)
-
     asin_pos = [p for p in pos if p.get("asin") == asin]
-    consumed = sum(int(p.get("units_ordered") or 0)
-                   for p in asin_pos
-                   if p.get("status") in ("ordered", "shipped", "received"))
-    available = purchased - consumed
-
     drafts = sorted(
         [p for p in asin_pos if p.get("status") == "draft"],
-        key=lambda p: (p.get("po_date") or "9999-12-31")
+        key=lambda p: (p.get("po_date") or "9999-12-31"),
     )
     committed = sum(int(p.get("units_ordered") or 0) for p in drafts)
 
-    running = available
-    next_deadline = None
-    deadline_po = None
+    running            = current_units
+    next_deadline      = None
+    deadline_po        = None
     deadline_shortfall = 0
-    walkthrough = []
+    walkthrough        = []
 
     for po in drafts:
-        units = int(po.get("units_ordered") or 0)
+        units       = int(po.get("units_ordered") or 0)
         po_date_str = po.get("po_date")
         po_date_obj = None
         if po_date_str:
@@ -1159,12 +1151,11 @@ def compute_label_runway(asin: str, label_purchases: list[dict],
                 "shortfall": shortfall,
                 "order_by":  order_by,
             })
-            running = 0   # used up everything to partially cover this PO
+            running = 0   # all stock consumed by partial fulfillment
 
-    # Status: red if past-due or within 1 week, amber if within 3 weeks, green otherwise
     today = date.today()
     if next_deadline is None:
-        status = "ok" if available >= 0 else "warning"
+        status = "ok" if current_units >= 0 else "warning"
     elif next_deadline <= today + timedelta(days=7):
         status = "critical"
     elif next_deadline <= today + timedelta(days=lead_days):
@@ -1174,11 +1165,9 @@ def compute_label_runway(asin: str, label_purchases: list[dict],
 
     return {
         "asin":               asin,
-        "purchased":          purchased,
-        "consumed":           consumed,
-        "available":          available,
+        "current_units":      current_units,
         "committed":          committed,
-        "after_drafts":       available - committed,
+        "after_drafts":       current_units - committed,
         "next_deadline":      next_deadline,
         "deadline_po":        deadline_po,
         "deadline_shortfall": deadline_shortfall,
@@ -1188,50 +1177,56 @@ def compute_label_runway(asin: str, label_purchases: list[dict],
 
 
 def render_labels_page(inventory_rows: list[dict]):
-    """Label inventory tracking & reorder-deadline alerts."""
-    import io as _io
+    """Label inventory page — edit current units inline; system handles the rest."""
     from datetime import date as _date
 
     st.markdown("#### 🏷️ Label Inventory")
+    st.caption(
+        "You maintain **one number per ASIN**: how many labels you currently have. "
+        "The system uses your **draft POs** to compute when each ASIN needs a label "
+        "reorder (PO date − label lead time)."
+    )
 
     if DEMO_MODE:
         st.info("Connect Supabase to manage label inventory.", icon="🧪")
         return
 
-    lead_days = int(st.session_state.get("label_lead_days", 21))
-    label_purchases = _load_label_purchases()
-    pos             = _load_pos()
-    asin_name       = {r["asin"]: r["name"] for r in inventory_rows}
-    all_asins       = [r["asin"] for r in inventory_rows]
-    asin_lbls       = {r["asin"]: f"{r['asin']} · {r['name']}" for r in inventory_rows}
+    lead_days  = int(st.session_state.get("label_lead_days", 21))
+    stock_map  = _load_label_stock()
+    pos        = _load_pos()
+    asin_name  = {r["asin"]: r["name"] for r in inventory_rows}
+    all_asins  = [r["asin"] for r in inventory_rows]
+    asin_lbls  = {r["asin"]: f"{r['asin']} · {r['name']}" for r in inventory_rows}
 
-    # Compute runway for every ASIN
-    runways = [compute_label_runway(a, label_purchases, pos, lead_days) for a in all_asins]
+    # Compute runway per ASIN
+    runways = []
+    for asin in all_asins:
+        cur = int((stock_map.get(asin, {}) or {}).get("current_units") or 0)
+        runways.append(compute_label_runway(asin, cur, pos, lead_days))
     runways_by_asin = {r["asin"]: r for r in runways}
 
     # ── Summary cards ─────────────────────────────────────────
-    total_purchased = sum(r["purchased"] for r in runways)
-    total_consumed  = sum(r["consumed"]  for r in runways)
-    total_avail     = total_purchased - total_consumed
-    total_committed = sum(r["committed"] for r in runways)
+    total_current   = sum(r["current_units"] for r in runways)
+    total_committed = sum(r["committed"]     for r in runways)
+    total_after     = total_current - total_committed
     asins_alert     = sum(1 for r in runways if r["status"] in ("critical", "warning"))
 
     cards_html = f'''
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
   <div style="background:#F4F4F2;border:1px solid #E0E0E0;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Total purchased</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_purchased:,}</div>
-    <div style="font-size:12px;color:#888;margin-top:4px">labels bought all-time</div>
-  </div>
-  <div style="background:#EAF3DE;border:1px solid #C8E0A5;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#3B6D11;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Available now</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_avail:,}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">purchased − consumed</div>
+    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Current stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_current:,}</div>
+    <div style="font-size:12px;color:#888;margin-top:4px">total labels on hand</div>
   </div>
   <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
     <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Committed (drafts)</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_committed:,}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">planned bottle orders</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">needed for planned POs</div>
+  </div>
+  <div style="background:{'#EAF3DE' if total_after >= 0 else '#FCEBEB'};border:1px solid {'#C8E0A5' if total_after >= 0 else '#F0BABA'};border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:{'#3B6D11' if total_after >= 0 else '#A32D2D'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">After drafts</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_after:,}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">current − committed</div>
   </div>
   <div style="background:{'#FCEBEB' if asins_alert>0 else '#F4F4F2'};border:1px solid {'#F0BABA' if asins_alert>0 else '#E0E0E0'};border-radius:10px;padding:16px 18px">
     <div style="font-size:11px;color:{'#A32D2D' if asins_alert>0 else '#666'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Need attention</div>
@@ -1244,7 +1239,7 @@ def render_labels_page(inventory_rows: list[dict]):
     # ── Top alerts banner ─────────────────────────────────────
     alerts = sorted(
         [r for r in runways if r["status"] in ("critical", "warning") and r["next_deadline"]],
-        key=lambda r: r["next_deadline"]
+        key=lambda r: r["next_deadline"],
     )
     if alerts:
         st.markdown("##### ⏰ Upcoming label reorder deadlines")
@@ -1262,49 +1257,83 @@ def render_labels_page(inventory_rows: list[dict]):
         st.dataframe(pd.DataFrame(rows_alert), use_container_width=True, hide_index=True)
         st.divider()
 
-    # ── Tabs ──────────────────────────────────────────────────
-    t_view, t_add, t_import, t_edit = st.tabs(
-        ["📊 Overview", "➕ Add Purchase", "📥 Import CSV", "✏️ Edit Purchases"]
+    # ── Tabs: Overview (editable) / Import / Walkthrough ──────
+    t_view, t_walk, t_import = st.tabs(
+        ["📊 Overview & edit", "🔍 Walkthrough", "📥 Import CSV"]
     )
 
-    # ── Tab 1: Overview ───────────────────────────────────────
+    # ── Tab 1: Editable overview ──────────────────────────────
     with t_view:
+        st.caption(
+            "Edit **Current units** inline, then click **Save**. "
+            "Other columns are computed automatically from your draft POs."
+        )
         rows_view = []
         for r in runways:
-            if r["purchased"] == 0 and r["committed"] == 0:
-                continue   # skip ASINs with no label data and no plans
             rows_view.append({
-                "ASIN":          r["asin"],
-                "Product":       asin_name.get(r["asin"], r["asin"])[:55],
-                "Purchased":     r["purchased"],
-                "Consumed":      r["consumed"],
-                "Available":     r["available"],
-                "Committed":     r["committed"],
-                "After drafts":  r["after_drafts"],
-                "Next deadline": r["next_deadline"] or "",
-                "Status":        {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
+                "ASIN":               r["asin"],
+                "Product":            asin_name.get(r["asin"], r["asin"])[:55],
+                "Current units":      int(r["current_units"]),
+                "Committed (drafts)": int(r["committed"]),
+                "After drafts":       int(r["after_drafts"]),
+                "Next deadline":      r["next_deadline"] if r["next_deadline"] else None,
+                "Status":             {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
             })
-        if rows_view:
-            df_view = pd.DataFrame(rows_view).sort_values(
-                by="Next deadline", key=lambda s: s.fillna("9999"), ascending=True
-            )
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
-        else:
-            st.info("No label purchases yet. Use **➕ Add Purchase** or **📥 Import CSV**.")
+        df_view = pd.DataFrame(rows_view)
 
-        # Expandable per-ASIN walkthrough
-        st.markdown("##### 🔍 Per-ASIN walkthrough")
-        st.caption("Pick an ASIN to see how draft POs deplete your label stock.")
+        edited = st.data_editor(
+            df_view,
+            column_config={
+                "ASIN":               st.column_config.TextColumn("ASIN", disabled=True),
+                "Product":            st.column_config.TextColumn("Product", disabled=True,
+                                                                  width="large"),
+                "Current units":      st.column_config.NumberColumn(
+                                          "Current units", min_value=0, step=100,
+                                          help="Labels you have on hand right now."),
+                "Committed (drafts)": st.column_config.NumberColumn(
+                                          "Committed (drafts)", disabled=True),
+                "After drafts":       st.column_config.NumberColumn(
+                                          "After drafts", disabled=True),
+                "Next deadline":      st.column_config.DateColumn(
+                                          "Next deadline", disabled=True),
+                "Status":             st.column_config.TextColumn("Status", disabled=True),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="lbl_stock_editor",
+            num_rows="fixed",
+        )
+
+        if st.button("💾 Save current units", type="primary", key="save_lbl_stock"):
+            saved = 0
+            for i, row in edited.iterrows():
+                new_units = int(row["Current units"])
+                old_units = int(df_view.iloc[i]["Current units"])
+                if new_units != old_units:
+                    if _save_label_stock(df_view.iloc[i]["ASIN"], new_units):
+                        saved += 1
+            if saved > 0:
+                st.success(f"Updated {saved} ASIN(s)")
+                st.rerun()
+            else:
+                st.info("No changes to save.")
+
+    # ── Tab 2: Per-ASIN walkthrough ───────────────────────────
+    with t_walk:
+        st.caption("Pick an ASIN to see how draft POs deplete your label stock chronologically.")
         sel = st.selectbox(
-            "ASIN", options=[r["asin"] for r in runways if r["purchased"] > 0 or r["committed"] > 0],
-            format_func=lambda x: asin_lbls.get(x, x), key="label_walk_asin"
+            "ASIN",
+            options=all_asins,
+            format_func=lambda x: asin_lbls.get(x, x),
+            key="label_walk_asin",
         )
         if sel:
             r = runways_by_asin[sel]
             st.markdown(
                 f"**{asin_name.get(sel, sel)}** · "
-                f"Purchased **{r['purchased']:,}** · Consumed **{r['consumed']:,}** · "
-                f"Available **{r['available']:,}**"
+                f"Current **{r['current_units']:,}** · "
+                f"Committed **{r['committed']:,}** · "
+                f"After drafts **{r['after_drafts']:,}**"
             )
             if not r["walkthrough"]:
                 st.info("No draft POs for this ASIN — nothing to plan against yet.")
@@ -1328,144 +1357,35 @@ def render_labels_page(inventory_rows: list[dict]):
                         })
                 st.dataframe(pd.DataFrame(walk), use_container_width=True, hide_index=True)
 
-    # ── Tab 2: Add purchase ───────────────────────────────────
-    with t_add:
-        st.markdown("**Record a new label purchase**")
-        a1, a2 = st.columns(2)
-        with a1:
-            new_asin     = st.selectbox("ASIN", options=all_asins,
-                                        format_func=lambda x: asin_lbls.get(x, x),
-                                        key="new_lbl_asin")
-            new_units    = st.number_input("Units (labels) purchased", min_value=1,
-                                           step=100, key="new_lbl_units")
-            new_date     = st.date_input("Purchase date", value=_date.today(),
-                                         key="new_lbl_date")
-        with a2:
-            new_supplier = st.text_input("Label supplier", key="new_lbl_supplier")
-            new_cost     = st.number_input("Total cost (€)", min_value=0.0, step=0.01,
-                                           format="%.2f", key="new_lbl_cost")
-            new_notes    = st.text_input("Notes (optional)", key="new_lbl_notes")
-
-        if st.button("➕ Add Purchase", type="primary", key="add_lbl_btn"):
-            rec = {
-                "asin":            new_asin,
-                "units_purchased": int(new_units),
-                "purchase_date":   str(new_date),
-                "supplier":        new_supplier or None,
-                "cost_eur":        float(new_cost) if new_cost else None,
-                "notes":           new_notes or None,
-            }
-            if _save_label_purchases([rec]):
-                st.success("Label purchase saved!")
-                st.rerun()
-
     # ── Tab 3: Import CSV ─────────────────────────────────────
     with t_import:
         st.markdown(
-            "Upload a CSV with columns: `asin`, `units_purchased`, `purchase_date` "
-            "(YYYY-MM-DD), `supplier` (optional), `cost_eur` (optional), `notes` (optional)."
+            "Upload a CSV with columns: `asin`, `current_units`. "
+            "Each row upserts that ASIN's label stock to the given count "
+            "(overwrites any previous value)."
         )
         uploaded = st.file_uploader("Pick a CSV file", type=["csv"], key="lbl_csv")
         if uploaded is not None:
             try:
                 df_imp = pd.read_csv(uploaded)
                 df_imp.columns = [c.strip().lower().replace(" ", "_") for c in df_imp.columns]
-                required = {"asin", "units_purchased"}
+                required = {"asin", "current_units"}
                 if not required.issubset(set(df_imp.columns)):
                     st.error(f"CSV missing required columns: {required - set(df_imp.columns)}")
                 else:
                     st.dataframe(df_imp.head(20), use_container_width=True)
                     if st.button("💾 Import all rows", type="primary", key="import_lbl_btn"):
-                        recs = []
+                        saved = 0
                         for _, row in df_imp.iterrows():
-                            recs.append({
-                                "asin":            str(row["asin"]).strip(),
-                                "units_purchased": int(row["units_purchased"]),
-                                "purchase_date":   (str(row.get("purchase_date"))
-                                                    if pd.notna(row.get("purchase_date"))
-                                                    else None),
-                                "supplier":        (str(row.get("supplier"))
-                                                    if pd.notna(row.get("supplier"))
-                                                    else None),
-                                "cost_eur":        (float(row.get("cost_eur"))
-                                                    if pd.notna(row.get("cost_eur"))
-                                                    else None),
-                                "notes":           (str(row.get("notes"))
-                                                    if pd.notna(row.get("notes"))
-                                                    else None),
-                            })
-                        if _save_label_purchases(recs):
-                            st.success(f"Imported {len(recs)} label purchases!")
-                            st.rerun()
+                            if _save_label_stock(
+                                str(row["asin"]).strip(),
+                                int(row["current_units"]),
+                            ):
+                                saved += 1
+                        st.success(f"Imported / updated {saved} ASINs.")
+                        st.rerun()
             except Exception as e:
                 st.error(f"CSV parse error: {e}")
-
-    # ── Tab 4: Edit purchases ─────────────────────────────────
-    with t_edit:
-        if not label_purchases:
-            st.info("No label purchases yet.")
-        else:
-            rows_edit = []
-            for p in label_purchases:
-                rows_edit.append({
-                    "id":          p["id"],
-                    "ASIN":        p.get("asin") or "",
-                    "Product":     asin_name.get(p.get("asin", ""), ""),
-                    "Units":       int(p.get("units_purchased") or 0),
-                    "Date":        (pd.to_datetime(p.get("purchase_date")).date()
-                                    if p.get("purchase_date") else None),
-                    "Supplier":    p.get("supplier") or "",
-                    "Cost (€)":    float(p.get("cost_eur") or 0),
-                    "Notes":       p.get("notes") or "",
-                })
-            df_e = pd.DataFrame(rows_edit)
-            edited = st.data_editor(
-                df_e.drop(columns=["id"]),
-                column_config={
-                    "ASIN":     st.column_config.TextColumn("ASIN", disabled=True),
-                    "Product":  st.column_config.TextColumn("Product", disabled=True,
-                                                            width="large"),
-                    "Units":    st.column_config.NumberColumn("Units", min_value=0),
-                    "Date":     st.column_config.DateColumn("Date"),
-                    "Supplier": st.column_config.TextColumn("Supplier"),
-                    "Cost (€)": st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
-                    "Notes":    st.column_config.TextColumn("Notes"),
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="lbl_editor",
-                num_rows="fixed",
-            )
-            cc1, cc2 = st.columns([1, 1])
-            with cc1:
-                if st.button("💾 Save edits", type="primary", key="save_lbl_btn"):
-                    to_save = []
-                    for i, row in edited.iterrows():
-                        to_save.append({
-                            "id":              int(df_e.iloc[i]["id"]),
-                            "asin":            df_e.iloc[i]["ASIN"],
-                            "units_purchased": int(row["Units"]),
-                            "purchase_date":   str(row["Date"]) if row["Date"] else None,
-                            "supplier":        row["Supplier"] or None,
-                            "cost_eur":        float(row["Cost (€)"]) if row["Cost (€)"] else None,
-                            "notes":           row["Notes"] or None,
-                        })
-                    if _save_label_purchases(to_save):
-                        st.success("Saved!")
-                        st.rerun()
-            with cc2:
-                del_id = st.selectbox(
-                    "Delete a purchase (by id)",
-                    options=[None] + [int(p["id"]) for p in label_purchases],
-                    format_func=lambda x: "—" if x is None else (
-                        f"#{x} · {next((p['asin'] for p in label_purchases if int(p['id'])==x), '?')}"
-                    ),
-                    key="del_lbl_pick",
-                )
-                if del_id and st.button("🗑️ Delete", key="del_lbl_btn"):
-                    if _delete_label_purchase(del_id):
-                        st.success(f"Deleted purchase #{del_id}")
-                        st.rerun()
 
 
 def render_orders_page(inventory_rows: list[dict]):
