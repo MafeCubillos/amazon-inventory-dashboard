@@ -1185,6 +1185,15 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
     after_open_pos     = current_units - committed
     deadline_shortfall = max(safety_buffer - after_open_pos, 0)
 
+    # Suggested order quantity = raw shortfall rounded UP to the next MOQ multiple.
+    # Labels typically print in batches of MOQ, so this is the actionable number.
+    raw_short = max(required - current_units, 0)
+    if raw_short > 0 and moq and moq > 0:
+        import math as _math
+        suggested_order = int(_math.ceil(raw_short / moq) * moq)
+    else:
+        suggested_order = int(raw_short)
+
     # Status
     if crit_deadline_date is not None and crit_deadline_date <= today_d + timedelta(days=7):
         status = "critical"
@@ -1209,6 +1218,7 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
         "next_deadline":      next_deadline,
         "deadline_po":        deadline_po,
         "deadline_shortfall": deadline_shortfall,
+        "suggested_order":    suggested_order,
         "walkthrough":        walkthrough,
         "status":             status,
     }
@@ -1289,13 +1299,13 @@ def render_labels_page(inventory_rows: list[dict]):
         rows_alert = []
         for a in alerts:
             rows_alert.append({
-                "ASIN":      a["asin"],
-                "Product":   asin_name.get(a["asin"], a["asin"])[:50],
-                "Order by":  a["next_deadline"],
-                "Days left": (a["next_deadline"] - _date.today()).days,
-                "Shortfall": a["deadline_shortfall"],
-                "For PO":    a["deadline_po"],
-                "Status":    "🔴 Critical" if a["status"] == "critical" else "🟡 Warning",
+                "ASIN":         a["asin"],
+                "Product":      asin_name.get(a["asin"], a["asin"])[:50],
+                "Order by":     a["next_deadline"],
+                "Days left":    (a["next_deadline"] - _date.today()).days,
+                "🛒 Order now": a["suggested_order"],
+                "For PO":       a["deadline_po"],
+                "Status":       "🔴 Critical" if a["status"] == "critical" else "🟡 Warning",
             })
         st.dataframe(pd.DataFrame(rows_alert), use_container_width=True, hide_index=True)
         st.divider()
@@ -1323,6 +1333,7 @@ def render_labels_page(inventory_rows: list[dict]):
                 "Required":             int(r["required"]),
                 "After open POs":       int(r["after_open_pos"]),
                 "Net vs required":      int(r["current_units"] - r["required"]),
+                "🛒 Order now":         int(r["suggested_order"]),
                 "Next deadline":        r["next_deadline"] if r["next_deadline"] else None,
                 "Status":               {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
             })
@@ -1351,6 +1362,10 @@ def render_labels_page(inventory_rows: list[dict]):
                 "Net vs required":      st.column_config.NumberColumn(
                                             "Net vs required", disabled=True,
                                             help="current − required (shortfall when negative)"),
+                "🛒 Order now":         st.column_config.NumberColumn(
+                                            "🛒 Order now", disabled=True,
+                                            help=("Rounded UP to next MOQ multiple. "
+                                                  "Zero = no order needed.")),
                 "Next deadline":        st.column_config.DateColumn(
                                             "Next deadline", disabled=True),
                 "Status":               st.column_config.TextColumn("Status", disabled=True),
