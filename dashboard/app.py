@@ -1097,16 +1097,26 @@ def _save_label_stock(asin: str, current_units: int, notes: str = "") -> bool:
 
 def compute_label_runway(asin: str, current_units: int, pos: list[dict],
                          lead_days: int = 21) -> dict:
-    """For one ASIN, walk through draft POs and find the first label shortfall.
+    """For one ASIN, walk through OPEN POs (anything not yet received) and find
+    the first label shortfall.
 
-    The deadline to reorder labels = po_date − lead_days. Status:
-      - critical  if deadline within 7 days (or past)
+    `current_units` is the physical label count at the user's warehouse RIGHT
+    NOW. Any PO that is draft/ordered/shipped will still consume labels from
+    that warehouse stock in the future. Only `received` POs have already
+    consumed their labels.
+
+    The deadline to reorder labels = first-shortfall PO date − lead_days,
+    floored to today if that date is in the past ("ASAP").
+    Status:
+      - critical  if deadline within 7 days (or past, or already in shortfall)
       - warning   if deadline within lead_days
-      - ok        otherwise (or no upcoming shortfall)
+      - ok        otherwise
     """
+    OPEN_STATUSES = ("draft", "ordered", "shipped")
+
     asin_pos = [p for p in pos if p.get("asin") == asin]
     drafts = sorted(
-        [p for p in asin_pos if p.get("status") == "draft"],
+        [p for p in asin_pos if p.get("status") in OPEN_STATUSES],
         key=lambda p: (p.get("po_date") or "9999-12-31"),
     )
     committed = sum(int(p.get("units_ordered") or 0) for p in drafts)
@@ -1138,8 +1148,14 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
             })
         else:
             shortfall = units - running
-            order_by  = (po_date_obj - timedelta(days=lead_days)) if po_date_obj else None
-            if next_deadline is None or (order_by and order_by < next_deadline):
+            today_d   = date.today()
+            if po_date_obj:
+                raw_order_by = po_date_obj - timedelta(days=lead_days)
+                # If the deadline is already in the past, surface it as today (ASAP)
+                order_by = max(raw_order_by, today_d)
+            else:
+                order_by = today_d   # no date → assume ASAP
+            if next_deadline is None or order_by < next_deadline:
                 next_deadline      = order_by
                 deadline_po        = po.get("po_number") or "(no #)"
                 deadline_shortfall = shortfall
@@ -1182,9 +1198,10 @@ def render_labels_page(inventory_rows: list[dict]):
 
     st.markdown("#### 🏷️ Label Inventory")
     st.caption(
-        "You maintain **one number per ASIN**: how many labels you currently have. "
-        "The system uses your **draft POs** to compute when each ASIN needs a label "
-        "reorder (PO date − label lead time)."
+        "You maintain **one number per ASIN** — labels physically at your warehouse "
+        "right now. The system deducts every **open PO** (draft + ordered + shipped, "
+        "anything not yet received) and warns when you'll run short, using your label "
+        "lead time to compute the deadline (PO date − lead time)."
     )
 
     if DEMO_MODE:
@@ -1219,12 +1236,12 @@ def render_labels_page(inventory_rows: list[dict]):
     <div style="font-size:12px;color:#888;margin-top:4px">total labels on hand</div>
   </div>
   <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Committed (drafts)</div>
+    <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Committed (open POs)</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_committed:,}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">needed for planned POs</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">draft + ordered + shipped POs</div>
   </div>
   <div style="background:{'#EAF3DE' if total_after >= 0 else '#FCEBEB'};border:1px solid {'#C8E0A5' if total_after >= 0 else '#F0BABA'};border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:{'#3B6D11' if total_after >= 0 else '#A32D2D'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">After drafts</div>
+    <div style="font-size:11px;color:{'#3B6D11' if total_after >= 0 else '#A32D2D'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">After open POs</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_after:,}</div>
     <div style="font-size:12px;color:#666;margin-top:4px">current − committed</div>
   </div>
@@ -1274,8 +1291,8 @@ def render_labels_page(inventory_rows: list[dict]):
                 "ASIN":               r["asin"],
                 "Product":            asin_name.get(r["asin"], r["asin"])[:55],
                 "Current units":      int(r["current_units"]),
-                "Committed (drafts)": int(r["committed"]),
-                "After drafts":       int(r["after_drafts"]),
+                "Committed (open POs)": int(r["committed"]),
+                "After open POs":       int(r["after_drafts"]),
                 "Next deadline":      r["next_deadline"] if r["next_deadline"] else None,
                 "Status":             {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
             })
@@ -1290,10 +1307,10 @@ def render_labels_page(inventory_rows: list[dict]):
                 "Current units":      st.column_config.NumberColumn(
                                           "Current units", min_value=0, step=100,
                                           help="Labels you have on hand right now."),
-                "Committed (drafts)": st.column_config.NumberColumn(
-                                          "Committed (drafts)", disabled=True),
-                "After drafts":       st.column_config.NumberColumn(
-                                          "After drafts", disabled=True),
+                "Committed (open POs)": st.column_config.NumberColumn(
+                                          "Committed (open POs)", disabled=True),
+                "After open POs":       st.column_config.NumberColumn(
+                                          "After open POs", disabled=True),
                 "Next deadline":      st.column_config.DateColumn(
                                           "Next deadline", disabled=True),
                 "Status":             st.column_config.TextColumn("Status", disabled=True),
@@ -1320,7 +1337,7 @@ def render_labels_page(inventory_rows: list[dict]):
 
     # ── Tab 2: Per-ASIN walkthrough ───────────────────────────
     with t_walk:
-        st.caption("Pick an ASIN to see how draft POs deplete your label stock chronologically.")
+        st.caption("Pick an ASIN to see how open POs deplete your label stock chronologically.")
         sel = st.selectbox(
             "ASIN",
             options=all_asins,
@@ -1333,23 +1350,23 @@ def render_labels_page(inventory_rows: list[dict]):
                 f"**{asin_name.get(sel, sel)}** · "
                 f"Current **{r['current_units']:,}** · "
                 f"Committed **{r['committed']:,}** · "
-                f"After drafts **{r['after_drafts']:,}**"
+                f"After open POs **{r['after_drafts']:,}**"
             )
             if not r["walkthrough"]:
-                st.info("No draft POs for this ASIN — nothing to plan against yet.")
+                st.info("No open POs for this ASIN — nothing to plan against yet.")
             else:
                 walk = []
                 for step in r["walkthrough"]:
                     if step["ok"]:
                         walk.append({
-                            "Draft PO":  step["po_number"],
+                            "PO #":      step["po_number"],
                             "PO date":   step["po_date"] or "",
                             "Units":     step["units"],
                             "Outcome":   f"✅ OK · {step['after']:,} labels left after",
                         })
                     else:
                         walk.append({
-                            "Draft PO":  step["po_number"],
+                            "PO #":      step["po_number"],
                             "PO date":   step["po_date"] or "",
                             "Units":     step["units"],
                             "Outcome":   (f"⚠️ Short by {step['shortfall']:,} · "
