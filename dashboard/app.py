@@ -724,10 +724,11 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
 * {{ box-sizing:border-box; margin:0; padding:0; }}
 body {{ font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;font-size:13px;
        background:transparent;color:#111; }}
-.tw {{ overflow-x:auto;border-radius:10px;border:1px solid #E8E8E8;
-      background:white;box-shadow:0 1px 4px rgba(0,0,0,.06); }}
+.tw {{ overflow:auto;max-height:calc(100vh - 50px);border-radius:10px;
+      border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06); }}
 table {{ width:100%;border-collapse:collapse;table-layout:fixed; }}
-thead tr {{ background:#111111; }}
+thead th {{ background:#111111;position:sticky;top:0;z-index:10;
+            box-shadow:0 1px 0 rgba(255,255,255,0.08); }}
 .mr:hover {{ background:#F5F5F0 !important; }}
 tr[id^="sub-"]:hover {{ background:#F0F0EE !important; }}
 td {{ max-width:0;overflow:hidden;text-overflow:ellipsis; }}
@@ -2777,7 +2778,10 @@ if page == "inventory":
     st.caption(f"{n_vis} of {len(rows)} products · Click any row to expand per-country detail")
 
     table_html = build_table_html(display_rows, active_mps, active_alerts)
-    max_h = 96 + len(display_rows) * 52 + len(display_rows) * 4 * 44 + 40
+    # Natural height assumes all rows expanded; cap so the inner table scrolls
+    # with a sticky header instead of growing the page itself.
+    natural_h = 96 + len(display_rows) * 52 + len(display_rows) * 4 * 44 + 40
+    max_h     = min(natural_h, 720)
     components.html(table_html, height=max_h, scrolling=False)
     render_edit_panel(rows)
 
