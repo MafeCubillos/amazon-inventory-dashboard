@@ -1316,6 +1316,15 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
     else:
         status = "ok"
 
+    # Reason — distinguish a real shortage from "just keeping the buffer topped up".
+    # A buffer-only warning is much less urgent than an actual stock-out.
+    if crit_deadline_date is not None:
+        deadline_reason = "shortage"   # at least one PO would fail
+    elif warn_deadline_date is not None:
+        deadline_reason = "buffer"     # POs covered, safety reserve breached
+    else:
+        deadline_reason = ""
+
     return {
         "asin":               asin,
         "current_units":      current_units,        # raw user-entered snapshot
@@ -1332,6 +1341,7 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
         "next_deadline":      next_deadline,
         "deadline_po":        deadline_po,
         "deadline_shortfall": deadline_shortfall,
+        "deadline_reason":    deadline_reason,
         "suggested_order":    suggested_order,
         "walkthrough":        walkthrough,
         "status":             status,
@@ -1417,9 +1427,13 @@ def render_labels_page(inventory_rows: list[dict]):
         st.markdown("##### ⏰ Upcoming label reorder deadlines")
         rows_alert = []
         for a in alerts:
+            reason = a.get("deadline_reason", "")
+            reason_lbl = ("🛑 Shortage" if reason == "shortage"
+                          else ("🛡️ Buffer top-up" if reason == "buffer" else "—"))
             rows_alert.append({
                 "ASIN":         a["asin"],
                 "Product":      asin_name.get(a["asin"], a["asin"])[:50],
+                "Reason":       reason_lbl,
                 "Order by":     a["next_deadline"],
                 "Days left":    (a["next_deadline"] - _date.today()).days,
                 "🛒 Order now": a["suggested_order"],
@@ -1458,6 +1472,9 @@ def render_labels_page(inventory_rows: list[dict]):
                 "Required":             int(r["required"]),
                 "Net vs required":      int(r["effective_current"] + r["incoming"] - r["required"]),
                 "🛒 Order now":         int(r["suggested_order"]),
+                "Reason":               ("🛑 Shortage" if r["deadline_reason"] == "shortage"
+                                          else ("🛡️ Buffer" if r["deadline_reason"] == "buffer"
+                                                else "—")),
                 "Next deadline":        r["next_deadline"] if r["next_deadline"] else None,
                 "Status":               {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
             })
@@ -1500,6 +1517,11 @@ def render_labels_page(inventory_rows: list[dict]):
                                             "🛒 Order now", disabled=True,
                                             help=("Rounded UP to next MOQ multiple. "
                                                   "Zero = no order needed.")),
+                "Reason":               st.column_config.TextColumn(
+                                            "Reason", disabled=True,
+                                            help=("🛑 Shortage = open POs can't be covered. "
+                                                  "🛡️ Buffer = open POs covered, just keeping "
+                                                  "safety reserve. Buffer alerts are much less urgent.")),
                 "Next deadline":        st.column_config.DateColumn(
                                             "Next deadline", disabled=True),
                 "Status":               st.column_config.TextColumn("Status", disabled=True),
