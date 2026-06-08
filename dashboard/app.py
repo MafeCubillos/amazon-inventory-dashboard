@@ -1157,7 +1157,16 @@ def _safe_date(s) -> date | None:
 
 def _po_event_date(po: dict) -> date:
     """Best-effort date of when a PO's labels were consumed (status=received).
-    Uses est_arrival → po_date → today as fallback."""
+
+    For received POs we use today as the event date — purchase_orders has no
+    'received_at' column, and est_arrival is often a stale estimate (it might
+    be in the past or wildly off). 'Today' represents "user just marked this
+    received in the system", which is what we care about for snapshot diffing.
+    For non-received POs (which don't trigger deductions anyway) we fall back
+    to est_arrival → po_date → today.
+    """
+    if po.get("status") == "received":
+        return date.today()
     return _safe_date(po.get("est_arrival")) or _safe_date(po.get("po_date")) or date.today()
 
 
@@ -1179,19 +1188,24 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
     asin_pos          = [p for p in pos          if p.get("asin") == asin]
     asin_label_orders = [lo for lo in label_orders if lo.get("asin") == asin]
 
-    # Bottle POs received after the user's snapshot → deduct
+    # Bottle POs received after the user's snapshot → deduct.
+    # ">=" lets same-day events count (typical: take snapshot in the morning,
+    # mark receipts later that day). Trade-off: if the user takes the snapshot
+    # AFTER marking receipts on the same day, those receipts will be deducted
+    # again — they should advance Snapshot date by +1 day or lower the snapshot
+    # number to compensate.
     deductions = sum(
         int(p.get("units_ordered") or 0)
         for p in asin_pos
-        if p.get("status") == "received" and _po_event_date(p) > snapshot_date
+        if p.get("status") == "received" and _po_event_date(p) >= snapshot_date
     )
-    # Label orders received after snapshot → add
+    # Label orders received after snapshot → add (same >= convention)
     additions = sum(
         int(lo.get("units") or 0)
         for lo in asin_label_orders
         if lo.get("status") == "received"
         and _safe_date(lo.get("received_date"))
-        and _safe_date(lo.get("received_date")) > snapshot_date
+        and _safe_date(lo.get("received_date")) >= snapshot_date
     )
     # Pending label orders → shown as "Incoming" (not yet adjusted)
     incoming = sum(
