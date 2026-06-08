@@ -1224,8 +1224,13 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
     safety_buffer = max(int(round(committed * buffer_pct / 100)), int(moq or 0))
     required = committed + safety_buffer
 
+    # Planning balance includes pending label orders (incoming) — we assume
+    # those will arrive before any of the open bottle POs need them. If the
+    # user's pending label order is scheduled to arrive AFTER a draft PO date,
+    # the math here is optimistic; for now we surface it as "available for
+    # planning" rather than ignoring it entirely.
     today_d = date.today()
-    running = effective_current
+    running = effective_current + incoming
     walkthrough = []
 
     # Track the first PO that pushes us below the safety buffer (warning level)
@@ -1271,9 +1276,9 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
         })
         running = max(new_running, 0)
 
-    # If we have no open POs but current stock is already below the buffer,
-    # we should still warn (e.g. 500 labels on hand, MOQ = 1000)
-    if not open_pos and effective_current < safety_buffer and safety_buffer > 0:
+    # If we have no open POs but planning balance (current + incoming) is
+    # already below the buffer, still warn (e.g. 500 on hand, MOQ 1000, no incoming)
+    if not open_pos and (effective_current + incoming) < safety_buffer and safety_buffer > 0:
         warn_deadline_date = today_d
         warn_deadline_po   = "(buffer)"
 
@@ -1282,12 +1287,16 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
     next_deadline      = crit_deadline_date or warn_deadline_date
     deadline_po        = crit_deadline_po   or warn_deadline_po
     # Shortfall to display: amount needed to restore buffer fully.
-    after_open_pos     = effective_current - committed
-    deadline_shortfall = max(safety_buffer - after_open_pos, 0)
+    # "After open POs" and "Order now" both factor in incoming (pending label
+    # orders), so the user isn't told to re-order labels they already have
+    # arriving from the label supplier.
+    available_for_planning = effective_current + incoming
+    after_open_pos         = available_for_planning - committed
+    deadline_shortfall     = max(safety_buffer - after_open_pos, 0)
 
     # Suggested order quantity = raw shortfall rounded UP to the next MOQ multiple.
     # Labels typically print in batches of MOQ, so this is the actionable number.
-    raw_short = max(required - effective_current, 0)
+    raw_short = max(required - available_for_planning, 0)
     if raw_short > 0 and moq and moq > 0:
         import math as _math
         suggested_order = int(_math.ceil(raw_short / moq) * moq)
@@ -1447,7 +1456,7 @@ def render_labels_page(inventory_rows: list[dict]):
                 "MOQ":                  int(r["moq"]),
                 "Committed (open POs)": int(r["committed"]),
                 "Required":             int(r["required"]),
-                "Net vs required":      int(r["effective_current"] - r["required"]),
+                "Net vs required":      int(r["effective_current"] + r["incoming"] - r["required"]),
                 "🛒 Order now":         int(r["suggested_order"]),
                 "Next deadline":        r["next_deadline"] if r["next_deadline"] else None,
                 "Status":               {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
@@ -1485,7 +1494,8 @@ def render_labels_page(inventory_rows: list[dict]):
                                             help=f"committed + max(committed × {buffer_pct}%, MOQ)"),
                 "Net vs required":      st.column_config.NumberColumn(
                                             "Net vs required", disabled=True,
-                                            help="Current − required (shortfall when negative)"),
+                                            help=("(Current + Incoming) − Required. "
+                                                  "Negative = order more labels.")),
                 "🛒 Order now":         st.column_config.NumberColumn(
                                             "🛒 Order now", disabled=True,
                                             help=("Rounded UP to next MOQ multiple. "
