@@ -1077,14 +1077,22 @@ def _load_label_stock() -> dict[str, dict]:
 
 
 def _save_label_stock(asin: str, current_units: int,
-                      moq: int | None = None, notes: str = "") -> bool:
-    """Upsert the current stock (and optionally MOQ) for one ASIN."""
+                      moq: int | None = None,
+                      snapshot_date: str | None = None,
+                      notes: str = "") -> bool:
+    """Upsert the current stock (and optionally MOQ + snapshot_date) for one ASIN.
+
+    snapshot_date defaults to today — meaning "this is my count as of today".
+    Receipts (bottle POs marked received, label orders marked received) after
+    this date will adjust effective_current automatically.
+    """
     try:
         from supabase import create_client as _cc
         adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
         payload = {
             "asin":          asin,
             "current_units": int(current_units),
+            "snapshot_date": snapshot_date or date.today().isoformat(),
             "notes":         notes or None,
             "updated_at":    datetime.now(timezone.utc).isoformat(),
         }
@@ -1097,26 +1105,103 @@ def _save_label_stock(asin: str, current_units: int,
         return False
 
 
-def compute_label_runway(asin: str, current_units: int, pos: list[dict],
+def _load_label_orders() -> list[dict]:
+    """Return all label purchase rows."""
+    if DEMO_MODE:
+        return []
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        return adm.table("label_orders").select("*").order(
+            "order_date", desc=True
+        ).execute().data or []
+    except Exception:
+        return []
+
+
+def _save_label_order(payload: dict) -> bool:
+    """Insert or update a single label order row."""
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        # Use upsert when id present, else insert
+        if payload.get("id"):
+            adm.table("label_orders").upsert(payload).execute()
+        else:
+            adm.table("label_orders").insert(payload).execute()
+        return True
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+        return False
+
+
+def _delete_label_order(order_id: int) -> bool:
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        adm.table("label_orders").delete().eq("id", int(order_id)).execute()
+        return True
+    except Exception as e:
+        st.error(f"Delete failed: {e}")
+        return False
+
+
+def _safe_date(s) -> date | None:
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except Exception:
+        return None
+
+
+def _po_event_date(po: dict) -> date:
+    """Best-effort date of when a PO's labels were consumed (status=received).
+    Uses est_arrival → po_date → today as fallback."""
+    return _safe_date(po.get("est_arrival")) or _safe_date(po.get("po_date")) or date.today()
+
+
+def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
+                         pos: list[dict], label_orders: list[dict],
                          lead_days: int = 21, moq: int = 1000,
                          buffer_pct: int = 20) -> dict:
-    """For one ASIN, walk through OPEN POs (anything not yet received) and find
-    the first label shortfall, including a safety buffer.
+    """Compute label inventory health for one ASIN.
 
-    Safety buffer  = max(committed × buffer_pct%, moq)
-    Required stock = committed + safety_buffer
-    Status:
-      🔴 critical  — stock can't cover committed POs (deadline within 7d)
-      🟡 warning   — covers committed but buffer is breached (within lead_days)
-      🟢 ok        — covers committed + buffer
+    effective_current = current_units
+                      − received bottle POs whose event date > snapshot_date
+                      + received label_orders whose received_date > snapshot_date
 
-    The deadline to reorder labels = first PO date where running stock drops
-    below the safety buffer, minus lead_days. Floored to today if that's in
-    the past ("ASAP").
+    Then walk OPEN bottle POs (draft/ordered/shipped) chronologically and find
+    the first shortfall against `effective_current`, including a safety buffer.
     """
     OPEN_STATUSES = ("draft", "ordered", "shipped")
 
-    asin_pos = [p for p in pos if p.get("asin") == asin]
+    asin_pos          = [p for p in pos          if p.get("asin") == asin]
+    asin_label_orders = [lo for lo in label_orders if lo.get("asin") == asin]
+
+    # Bottle POs received after the user's snapshot → deduct
+    deductions = sum(
+        int(p.get("units_ordered") or 0)
+        for p in asin_pos
+        if p.get("status") == "received" and _po_event_date(p) > snapshot_date
+    )
+    # Label orders received after snapshot → add
+    additions = sum(
+        int(lo.get("units") or 0)
+        for lo in asin_label_orders
+        if lo.get("status") == "received"
+        and _safe_date(lo.get("received_date"))
+        and _safe_date(lo.get("received_date")) > snapshot_date
+    )
+    # Pending label orders → shown as "Incoming" (not yet adjusted)
+    incoming = sum(
+        int(lo.get("units") or 0)
+        for lo in asin_label_orders
+        if lo.get("status") == "pending"
+    )
+
+    effective_current = current_units - deductions + additions
+
     open_pos = sorted(
         [p for p in asin_pos if p.get("status") in OPEN_STATUSES],
         key=lambda p: (p.get("po_date") or "9999-12-31"),
@@ -1126,7 +1211,7 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
     required = committed + safety_buffer
 
     today_d = date.today()
-    running = current_units
+    running = effective_current
     walkthrough = []
 
     # Track the first PO that pushes us below the safety buffer (warning level)
@@ -1174,7 +1259,7 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
 
     # If we have no open POs but current stock is already below the buffer,
     # we should still warn (e.g. 500 labels on hand, MOQ = 1000)
-    if not open_pos and current_units < safety_buffer and safety_buffer > 0:
+    if not open_pos and effective_current < safety_buffer and safety_buffer > 0:
         warn_deadline_date = today_d
         warn_deadline_po   = "(buffer)"
 
@@ -1183,12 +1268,12 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
     next_deadline      = crit_deadline_date or warn_deadline_date
     deadline_po        = crit_deadline_po   or warn_deadline_po
     # Shortfall to display: amount needed to restore buffer fully.
-    after_open_pos     = current_units - committed
+    after_open_pos     = effective_current - committed
     deadline_shortfall = max(safety_buffer - after_open_pos, 0)
 
     # Suggested order quantity = raw shortfall rounded UP to the next MOQ multiple.
     # Labels typically print in batches of MOQ, so this is the actionable number.
-    raw_short = max(required - current_units, 0)
+    raw_short = max(required - effective_current, 0)
     if raw_short > 0 and moq and moq > 0:
         import math as _math
         suggested_order = int(_math.ceil(raw_short / moq) * moq)
@@ -1210,7 +1295,12 @@ def compute_label_runway(asin: str, current_units: int, pos: list[dict],
 
     return {
         "asin":               asin,
-        "current_units":      current_units,
+        "current_units":      current_units,        # raw user-entered snapshot
+        "effective_current":  effective_current,    # snapshot ± events since snapshot
+        "snapshot_date":      snapshot_date,
+        "deductions":         deductions,           # received bottle POs since snapshot
+        "additions":          additions,            # received label orders since snapshot
+        "incoming":           incoming,             # pending label orders
         "moq":                int(moq or 0),
         "committed":          committed,
         "safety_buffer":      safety_buffer,
@@ -1241,14 +1331,15 @@ def render_labels_page(inventory_rows: list[dict]):
         st.info("Connect Supabase to manage label inventory.", icon="🧪")
         return
 
-    lead_days  = int(st.session_state.get("label_lead_days", 21))
-    buffer_pct = int(st.session_state.get("label_buffer_pct", 20))
-    default_moq = 1000
-    stock_map  = _load_label_stock()
-    pos        = _load_pos()
-    asin_name  = {r["asin"]: r["name"] for r in inventory_rows}
-    all_asins  = [r["asin"] for r in inventory_rows]
-    asin_lbls  = {r["asin"]: f"{r['asin']} · {r['name']}" for r in inventory_rows}
+    lead_days    = int(st.session_state.get("label_lead_days", 21))
+    buffer_pct   = int(st.session_state.get("label_buffer_pct", 20))
+    default_moq  = 1000
+    stock_map    = _load_label_stock()
+    pos          = _load_pos()
+    label_orders = _load_label_orders()
+    asin_name    = {r["asin"]: r["name"] for r in inventory_rows}
+    all_asins    = [r["asin"] for r in inventory_rows]
+    asin_lbls    = {r["asin"]: f"{r['asin']} · {r['name']}" for r in inventory_rows}
 
     # Compute runway per ASIN
     runways = []
@@ -1256,12 +1347,16 @@ def render_labels_page(inventory_rows: list[dict]):
         row = stock_map.get(asin, {}) or {}
         cur = int(row.get("current_units") or 0)
         moq = int(row.get("moq") if row.get("moq") is not None else default_moq)
-        runways.append(compute_label_runway(asin, cur, pos, lead_days, moq, buffer_pct))
+        snap = _safe_date(row.get("snapshot_date")) or _date.today()
+        runways.append(compute_label_runway(
+            asin, cur, snap, pos, label_orders, lead_days, moq, buffer_pct
+        ))
     runways_by_asin = {r["asin"]: r for r in runways}
 
     # ── Summary cards ─────────────────────────────────────────
-    total_current   = sum(r["current_units"] for r in runways)
-    total_committed = sum(r["committed"]     for r in runways)
+    total_current   = sum(r["effective_current"] for r in runways)
+    total_committed = sum(r["committed"]         for r in runways)
+    total_incoming  = sum(r["incoming"]          for r in runways)
     total_after     = total_current - total_committed
     asins_alert     = sum(1 for r in runways if r["status"] in ("critical", "warning"))
 
@@ -1275,7 +1370,7 @@ def render_labels_page(inventory_rows: list[dict]):
   <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
     <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Committed (open POs)</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_committed:,}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">draft + ordered + shipped POs</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">draft + ordered + shipped POs · {total_incoming:,} labels incoming</div>
   </div>
   <div style="background:{'#EAF3DE' if total_after >= 0 else '#FCEBEB'};border:1px solid {'#C8E0A5' if total_after >= 0 else '#F0BABA'};border-radius:10px;padding:16px 18px">
     <div style="font-size:11px;color:{'#3B6D11' if total_after >= 0 else '#A32D2D'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">After open POs</div>
@@ -1311,29 +1406,34 @@ def render_labels_page(inventory_rows: list[dict]):
         st.dataframe(pd.DataFrame(rows_alert), use_container_width=True, hide_index=True)
         st.divider()
 
-    # ── Tabs: Overview (editable) / Import / Walkthrough ──────
-    t_view, t_walk, t_import = st.tabs(
-        ["📊 Overview & edit", "🔍 Walkthrough", "📥 Import CSV"]
+    # ── Tabs: Overview / Label Orders / Walkthrough / Import ──
+    t_view, t_orders, t_walk, t_import = st.tabs(
+        ["📊 Overview & edit", "📦 Label Orders", "🔍 Walkthrough", "📥 Import CSV"]
     )
 
     # ── Tab 1: Editable overview ──────────────────────────────
     with t_view:
         st.caption(
-            f"Edit **Current units** and **MOQ** inline, then click **Save**. "
+            f"**Current** = your snapshot ± receipts since the snapshot date. "
             f"Required = committed + max(committed × {buffer_pct}%, MOQ). "
-            f"Buffer % is configurable in Settings."
+            f"Edit **Snapshot**, **Snapshot date**, and **MOQ** inline; when you "
+            f"save, the snapshot date resets to today (your number is now the truth)."
         )
         rows_view = []
         for r in runways:
+            adj = r["additions"] - r["deductions"]   # signed adjustment
             rows_view.append({
                 "ASIN":                 r["asin"],
                 "Product":              asin_name.get(r["asin"], r["asin"])[:55],
-                "Current units":        int(r["current_units"]),
+                "Snapshot":             int(r["current_units"]),
+                "Snapshot date":        r["snapshot_date"],
+                "Adj since":            int(adj),
+                "Current":              int(r["effective_current"]),
+                "Incoming":             int(r["incoming"]),
                 "MOQ":                  int(r["moq"]),
                 "Committed (open POs)": int(r["committed"]),
                 "Required":             int(r["required"]),
-                "After open POs":       int(r["after_open_pos"]),
-                "Net vs required":      int(r["current_units"] - r["required"]),
+                "Net vs required":      int(r["effective_current"] - r["required"]),
                 "🛒 Order now":         int(r["suggested_order"]),
                 "Next deadline":        r["next_deadline"] if r["next_deadline"] else None,
                 "Status":               {"critical":"🔴","warning":"🟡","ok":"🟢"}[r["status"]],
@@ -1346,9 +1446,21 @@ def render_labels_page(inventory_rows: list[dict]):
                 "ASIN":                 st.column_config.TextColumn("ASIN", disabled=True),
                 "Product":              st.column_config.TextColumn("Product", disabled=True,
                                                                     width="large"),
-                "Current units":        st.column_config.NumberColumn(
-                                            "Current units", min_value=0, step=100,
-                                            help="Labels you have on hand right now."),
+                "Snapshot":             st.column_config.NumberColumn(
+                                            "Snapshot", min_value=0, step=100,
+                                            help="Labels on hand as of Snapshot date."),
+                "Snapshot date":        st.column_config.DateColumn(
+                                            "Snapshot date",
+                                            help="When you took this count. Receipts after this date are auto-applied."),
+                "Adj since":            st.column_config.NumberColumn(
+                                            "Adj since", disabled=True,
+                                            help="+ received label orders − received bottle POs (since snapshot)"),
+                "Current":              st.column_config.NumberColumn(
+                                            "Current", disabled=True,
+                                            help="Effective current = Snapshot + Adj since"),
+                "Incoming":             st.column_config.NumberColumn(
+                                            "Incoming", disabled=True,
+                                            help="Pending label orders (en route from supplier)"),
                 "MOQ":                  st.column_config.NumberColumn(
                                             "MOQ (bottles)", min_value=0, step=100,
                                             help="Minimum order quantity from your bottle supplier."),
@@ -1357,12 +1469,9 @@ def render_labels_page(inventory_rows: list[dict]):
                 "Required":             st.column_config.NumberColumn(
                                             "Required", disabled=True,
                                             help=f"committed + max(committed × {buffer_pct}%, MOQ)"),
-                "After open POs":       st.column_config.NumberColumn(
-                                            "After open POs", disabled=True,
-                                            help="current − committed (raw leftover)"),
                 "Net vs required":      st.column_config.NumberColumn(
                                             "Net vs required", disabled=True,
-                                            help="current − required (shortfall when negative)"),
+                                            help="Current − required (shortfall when negative)"),
                 "🛒 Order now":         st.column_config.NumberColumn(
                                             "🛒 Order now", disabled=True,
                                             help=("Rounded UP to next MOQ multiple. "
@@ -1380,12 +1489,20 @@ def render_labels_page(inventory_rows: list[dict]):
         if st.button("💾 Save changes", type="primary", key="save_lbl_stock"):
             saved = 0
             for i, row in edited.iterrows():
-                new_units = int(row["Current units"])
+                new_units = int(row["Snapshot"])
                 new_moq   = int(row["MOQ"])
-                old_units = int(df_view.iloc[i]["Current units"])
+                new_snap  = row["Snapshot date"]
+                old_units = int(df_view.iloc[i]["Snapshot"])
                 old_moq   = int(df_view.iloc[i]["MOQ"])
-                if new_units != old_units or new_moq != old_moq:
-                    if _save_label_stock(df_view.iloc[i]["ASIN"], new_units, moq=new_moq):
+                old_snap  = df_view.iloc[i]["Snapshot date"]
+                if new_units != old_units or new_moq != old_moq or new_snap != old_snap:
+                    snap_str = (new_snap.isoformat()
+                                if new_snap and hasattr(new_snap, "isoformat")
+                                else (str(new_snap) if new_snap else None))
+                    if _save_label_stock(
+                        df_view.iloc[i]["ASIN"], new_units,
+                        moq=new_moq, snapshot_date=snap_str,
+                    ):
                         saved += 1
             if saved > 0:
                 st.success(f"Updated {saved} ASIN(s)")
@@ -1393,7 +1510,137 @@ def render_labels_page(inventory_rows: list[dict]):
             else:
                 st.info("No changes to save.")
 
-    # ── Tab 2: Per-ASIN walkthrough ───────────────────────────
+    # ── Tab: Label Orders (incoming label purchases) ──────────
+    with t_orders:
+        st.caption(
+            "Log label orders placed with your label supplier. **Pending** = en "
+            "route (counted as Incoming). **Received** = arrived — adds to your "
+            "label stock automatically if received after the snapshot date."
+        )
+
+        # Add new
+        with st.container(border=True):
+            st.markdown("**➕ Add a label order**")
+            c1, c2 = st.columns(2)
+            with c1:
+                new_asin = st.selectbox("ASIN",
+                                        options=all_asins,
+                                        format_func=lambda x: asin_lbls.get(x, x),
+                                        key="new_lo_asin")
+                new_units = st.number_input("Units", min_value=1, step=100, key="new_lo_units")
+                new_order = st.date_input("Order date", value=_date.today(), key="new_lo_order")
+                new_est   = st.date_input("Est. arrival",
+                                          value=_date.today() + timedelta(days=lead_days),
+                                          key="new_lo_est")
+            with c2:
+                new_status = st.selectbox("Status",
+                                          options=["pending", "received", "cancelled"],
+                                          index=0, key="new_lo_status")
+                new_rec_d  = st.date_input("Received date (if received)",
+                                           value=_date.today(), key="new_lo_recd")
+                new_supp   = st.text_input("Supplier", key="new_lo_supplier")
+                new_cost   = st.number_input("Cost (€)", min_value=0.0, step=0.01,
+                                             format="%.2f", key="new_lo_cost")
+                new_notes  = st.text_input("Notes", key="new_lo_notes")
+
+            if st.button("➕ Add label order", type="primary", key="add_lo_btn"):
+                payload = {
+                    "asin":          new_asin,
+                    "units":         int(new_units),
+                    "order_date":    str(new_order),
+                    "est_arrival":   str(new_est),
+                    "received_date": str(new_rec_d) if new_status == "received" else None,
+                    "status":        new_status,
+                    "supplier":      new_supp or None,
+                    "cost_eur":      float(new_cost) if new_cost else None,
+                    "notes":         new_notes or None,
+                }
+                if _save_label_order(payload):
+                    st.success("Label order added!")
+                    st.rerun()
+
+        # Edit / delete existing
+        if not label_orders:
+            st.info("No label orders logged yet.")
+        else:
+            rows_lo = []
+            for lo in label_orders:
+                rows_lo.append({
+                    "id":            lo["id"],
+                    "ASIN":          lo.get("asin") or "",
+                    "Product":       asin_name.get(lo.get("asin",""), "")[:50],
+                    "Units":         int(lo.get("units") or 0),
+                    "Order date":    _safe_date(lo.get("order_date")),
+                    "Est. arrival":  _safe_date(lo.get("est_arrival")),
+                    "Received date": _safe_date(lo.get("received_date")),
+                    "Status":        lo.get("status") or "pending",
+                    "Supplier":      lo.get("supplier") or "",
+                    "Cost (€)":      float(lo.get("cost_eur") or 0),
+                    "Notes":         lo.get("notes") or "",
+                })
+            df_lo = pd.DataFrame(rows_lo)
+            edited_lo = st.data_editor(
+                df_lo.drop(columns=["id"]),
+                column_config={
+                    "ASIN":          st.column_config.TextColumn("ASIN", disabled=True),
+                    "Product":       st.column_config.TextColumn("Product", disabled=True,
+                                                                 width="large"),
+                    "Units":         st.column_config.NumberColumn("Units", min_value=0),
+                    "Order date":    st.column_config.DateColumn("Order date"),
+                    "Est. arrival":  st.column_config.DateColumn("Est. arrival"),
+                    "Received date": st.column_config.DateColumn("Received date"),
+                    "Status":        st.column_config.SelectboxColumn(
+                                         "Status",
+                                         options=["pending", "received", "cancelled"]),
+                    "Supplier":      st.column_config.TextColumn("Supplier"),
+                    "Cost (€)":      st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
+                    "Notes":         st.column_config.TextColumn("Notes"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="lo_editor",
+                num_rows="fixed",
+            )
+
+            ec1, ec2 = st.columns(2)
+            with ec1:
+                if st.button("💾 Save edits", type="primary", key="save_lo_btn"):
+                    saved = 0
+                    for i, row in edited_lo.iterrows():
+                        payload = {
+                            "id":            int(df_lo.iloc[i]["id"]),
+                            "asin":          df_lo.iloc[i]["ASIN"],
+                            "units":         int(row["Units"]),
+                            "order_date":    (row["Order date"].isoformat()
+                                              if row["Order date"] else None),
+                            "est_arrival":   (row["Est. arrival"].isoformat()
+                                              if row["Est. arrival"] else None),
+                            "received_date": (row["Received date"].isoformat()
+                                              if row["Received date"] else None),
+                            "status":        row["Status"],
+                            "supplier":      row["Supplier"] or None,
+                            "cost_eur":      float(row["Cost (€)"]) if row["Cost (€)"] else None,
+                            "notes":         row["Notes"] or None,
+                        }
+                        if _save_label_order(payload):
+                            saved += 1
+                    st.success(f"Saved {saved} order(s)")
+                    st.rerun()
+            with ec2:
+                del_id = st.selectbox(
+                    "Delete (by id)",
+                    options=[None] + [int(lo["id"]) for lo in label_orders],
+                    format_func=lambda x: "—" if x is None else (
+                        f"#{x} · {next((lo['asin'] for lo in label_orders if int(lo['id'])==x), '?')}"
+                    ),
+                    key="del_lo_pick",
+                )
+                if del_id and st.button("🗑️ Delete", key="del_lo_btn"):
+                    if _delete_label_order(del_id):
+                        st.success(f"Deleted order #{del_id}")
+                        st.rerun()
+
+    # ── Tab: Per-ASIN walkthrough ─────────────────────────────
     with t_walk:
         st.caption("Pick an ASIN to see how open POs deplete your label stock chronologically.")
         sel = st.selectbox(
@@ -1406,11 +1653,13 @@ def render_labels_page(inventory_rows: list[dict]):
             r = runways_by_asin[sel]
             st.markdown(
                 f"**{asin_name.get(sel, sel)}** · "
-                f"Current **{r['current_units']:,}** · "
+                f"Snapshot **{r['current_units']:,}** (as of {r['snapshot_date']}) · "
+                f"Adj since: **{r['additions'] - r['deductions']:+,}** · "
+                f"Current **{r['effective_current']:,}** · "
+                f"Incoming **{r['incoming']:,}** · "
                 f"MOQ **{r['moq']:,}** · "
                 f"Committed **{r['committed']:,}** · "
-                f"Required **{r['required']:,}** · "
-                f"After open POs **{r['after_open_pos']:,}**"
+                f"Required **{r['required']:,}**"
             )
             if not r["walkthrough"]:
                 st.info("No open POs for this ASIN — nothing to plan against yet.")
