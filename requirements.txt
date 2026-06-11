@@ -2,7 +2,10 @@
 python-amazon-sp-api>=0.19.14
 
 # Database
-supabase>=2.3.0
+# Older supabase (2.3.x) requires httpx 0.24 which has a httpcore<0.18 cap that
+# conflicts with everything else on Streamlit Cloud. Modern versions (2.15+)
+# drop that constraint and resolve cleanly.
+supabase>=2.15.0,<3.0.0
 
 # Scheduler
 APScheduler>=3.10.4
