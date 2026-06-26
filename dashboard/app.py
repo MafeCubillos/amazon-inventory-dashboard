@@ -848,6 +848,7 @@ def render_sidebar():
                      ("🚚", "Reorder",        "reorder"),
                      ("📋", "Orders",         "orders"),
                      ("🏷️", "Labels",         "labels"),
+                     ("🏠", "Local Stock",    "local"),
                      ("📈", "Forecast",       "forecast"),
                      ("⚙️", "Settings",       "settings")]
 
@@ -1762,6 +1763,176 @@ def render_labels_page(inventory_rows: list[dict]):
                 st.error(f"CSV parse error: {e}")
 
 
+# ══════════════════════════════════════════════════════════════
+# LOCAL STOCK  (bottles physically at user's own warehouse/home)
+# ══════════════════════════════════════════════════════════════
+
+def _load_local_stock() -> dict[str, dict]:
+    """Return dict[asin] -> {units, updated_at, notes}. Empty if table missing."""
+    if DEMO_MODE:
+        return {}
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        rows = adm.table("local_stock").select("*").execute().data or []
+        return {r["asin"]: r for r in rows}
+    except Exception:
+        return {}
+
+
+def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        adm.table("local_stock").upsert(
+            {
+                "asin":       asin,
+                "units":      int(units),
+                "notes":      notes or None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="asin",
+        ).execute()
+        return True
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+        return False
+
+
+def render_local_stock_page(inventory_rows: list[dict]):
+    """Local stock tracking — units at user's own warehouse (off-Amazon)."""
+    st.markdown("#### 🏠 Local Stock")
+    st.caption(
+        "Bottles you have physically at **your own warehouse / home**, separate "
+        "from Amazon FBA. Each ASIN is one editable number. The Reorder Planner "
+        "automatically subtracts this from what you need to order from your supplier."
+    )
+
+    if DEMO_MODE:
+        st.info("Connect Supabase to manage local stock.", icon="🧪")
+        return
+
+    stock_map = _load_local_stock()
+    asin_name = {r["asin"]: r["name"] for r in inventory_rows}
+    all_asins = [r["asin"] for r in inventory_rows]
+
+    # ── Summary card ──────────────────────────────────────────
+    total_units = sum(int((stock_map.get(a, {}) or {}).get("units") or 0) for a in all_asins)
+    asins_with_stock = sum(
+        1 for a in all_asins if int((stock_map.get(a, {}) or {}).get("units") or 0) > 0
+    )
+
+    cards_html = f'''
+<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px">
+  <div style="background:#EAF3DE;border:1px solid #C8E0A5;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#3B6D11;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Total local stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_units:,}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">bottles at your warehouse</div>
+  </div>
+  <div style="background:#F4F4F2;border:1px solid #E0E0E0;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{asins_with_stock}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">products you keep locally</div>
+  </div>
+</div>'''
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # ── Tabs ──────────────────────────────────────────────────
+    t_view, t_import = st.tabs(["📊 Overview & edit", "📥 Import CSV"])
+
+    # ── Tab 1: Editable table ─────────────────────────────────
+    with t_view:
+        st.caption(
+            "Edit **Local units** inline, then click **Save**. "
+            "Updates flow into the Reorder Planner automatically."
+        )
+
+        rows_view = []
+        for asin in all_asins:
+            row = stock_map.get(asin, {}) or {}
+            updated = row.get("updated_at")
+            try:
+                updated_lbl = pd.to_datetime(updated).strftime("%Y-%m-%d") if updated else ""
+            except Exception:
+                updated_lbl = ""
+            rows_view.append({
+                "ASIN":         asin,
+                "Product":      asin_name.get(asin, asin)[:55],
+                "Local units":  int(row.get("units") or 0),
+                "Last updated": updated_lbl,
+                "Notes":        row.get("notes") or "",
+            })
+        df_view = pd.DataFrame(rows_view)
+
+        edited = st.data_editor(
+            df_view,
+            column_config={
+                "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
+                "Product":      st.column_config.TextColumn("Product", disabled=True,
+                                                            width="large"),
+                "Local units":  st.column_config.NumberColumn(
+                                    "Local units", min_value=0, step=10,
+                                    help="Bottles at your warehouse for this ASIN."),
+                "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
+                "Notes":        st.column_config.TextColumn("Notes",
+                                    help="Optional — e.g. 'box #3 in basement'"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="local_stock_editor",
+            num_rows="fixed",
+        )
+
+        if st.button("💾 Save changes", type="primary", key="save_local_stock"):
+            saved = 0
+            for i, row in edited.iterrows():
+                new_units = int(row["Local units"])
+                new_notes = str(row["Notes"] or "")
+                old_units = int(df_view.iloc[i]["Local units"])
+                old_notes = str(df_view.iloc[i]["Notes"] or "")
+                if new_units != old_units or new_notes != old_notes:
+                    if _save_local_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
+                        saved += 1
+            if saved > 0:
+                st.success(f"Updated {saved} ASIN(s)")
+                st.rerun()
+            else:
+                st.info("No changes to save.")
+
+    # ── Tab 2: Import CSV ─────────────────────────────────────
+    with t_import:
+        st.markdown(
+            "Upload a CSV with columns: `asin`, `units`, optionally `notes`. "
+            "Each row upserts that ASIN's local stock to the given count."
+        )
+        uploaded = st.file_uploader("Pick a CSV file", type=["csv"], key="local_csv")
+        if uploaded is not None:
+            try:
+                df_imp = pd.read_csv(uploaded)
+                df_imp.columns = [c.strip().lower().replace(" ", "_") for c in df_imp.columns]
+                required_cols = {"asin", "units"}
+                if not required_cols.issubset(set(df_imp.columns)):
+                    st.error(f"CSV missing required columns: {required_cols - set(df_imp.columns)}")
+                else:
+                    st.dataframe(df_imp.head(20), use_container_width=True)
+                    if st.button("💾 Import all rows", type="primary", key="import_local_btn"):
+                        saved = 0
+                        for _, row in df_imp.iterrows():
+                            notes_val = (str(row["notes"])
+                                         if "notes" in df_imp.columns and pd.notna(row.get("notes"))
+                                         else "")
+                            if _save_local_stock(
+                                str(row["asin"]).strip(),
+                                int(row["units"]),
+                                notes_val,
+                            ):
+                                saved += 1
+                        st.success(f"Imported / updated {saved} ASINs.")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"CSV parse error: {e}")
+
+
 def render_orders_page(inventory_rows: list[dict]):
     from datetime import date as _date
     import io as _io
@@ -2112,6 +2283,15 @@ def render_reorder_planner(rows: list[dict]):
             unsafe_allow_html=True,
         )
 
+    # ── Local stock available for supply ───────────────────────
+    # Bottles at the user's own warehouse reduce what we need to order from
+    # the supplier. Applied per-ASIN, first-come-first-served across countries.
+    local_stock_map = _load_local_stock()
+    local_remaining = {
+        asin: int((local_stock_map.get(asin, {}) or {}).get("units") or 0)
+        for asin in {r["asin"] for r in rows}
+    }
+
     # ── Build needs table ──────────────────────────────────────
     needs = []
 
@@ -2194,6 +2374,15 @@ def render_reorder_planner(rows: list[dict]):
             else:
                 alert = "🟢 OK"
 
+            # Apply local stock (first-come-first-served across countries).
+            # Reduces what we need from the supplier — the user can fulfill
+            # from their own warehouse first before placing a supplier order.
+            local_used = 0
+            if reorder_qty > 0 and local_remaining.get(asin, 0) > 0:
+                local_used = min(local_remaining[asin], reorder_qty)
+                reorder_qty -= local_used
+                local_remaining[asin] -= local_used
+
             # Only show rows that need attention (order within 45 days or already late)
             if days_to_order <= 45:
                 needs.append({
@@ -2203,6 +2392,7 @@ def render_reorder_planner(rows: list[dict]):
                     "Stock":         stock,
                     "Inbound":       inbound,
                     "On order 📦":   on_order,
+                    "🏠 Local":      local_used,
                     "Vel/day":       round(vel, 1),
                     "Stockout est.": stockout_lbl,
                     "Order by":      order_by_lbl,
@@ -3092,6 +3282,10 @@ elif page == "orders":
 # ════════ PAGE: LABELS ════════
 elif page == "labels":
     render_labels_page(rows)
+
+# ════════ PAGE: LOCAL STOCK ════════
+elif page == "local":
+    render_local_stock_page(rows)
 
 # ════════ PAGE: FORECAST ════════
 elif page == "forecast":
