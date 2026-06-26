@@ -2426,7 +2426,7 @@ def render_reorder_planner(rows: list[dict]):
     )
 
     # ── Editable table ─────────────────────────────────────────
-    display_cols = ["Product","MP","Source","Stock","Inbound","On order 📦","Vel/day",
+    display_cols = ["Product","MP","Source","Stock","Inbound","On order 📦","🏠 Local","Vel/day",
                     "Stockout est.","Order by","Days to order","Alert","Reorder units"]
     df_show = pd.DataFrame(needs)[display_cols]
 
@@ -2440,6 +2440,8 @@ def render_reorder_planner(rows: list[dict]):
             "Inbound":       st.column_config.NumberColumn("Inbound",      disabled=True),
             "On order 📦":   st.column_config.NumberColumn("On order 📦",  disabled=True,
                              help="Units ordered from supplier (ordered+shipped POs)"),
+            "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True,
+                             help="Units pulled from your local warehouse to reduce this reorder"),
             "Vel/day":       st.column_config.NumberColumn("Vel/day",      format="%.1f", disabled=True),
             "Stockout est.": st.column_config.TextColumn("Stockout est.", disabled=True),
             "Order by":      st.column_config.TextColumn("Order by",      disabled=True),
