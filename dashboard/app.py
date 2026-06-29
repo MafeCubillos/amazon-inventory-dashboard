@@ -86,9 +86,17 @@ if not DEMO_MODE:
         )
     db = _get_db()
 
-MARKETPLACES = ["ES", "FR", "DE", "IT"]
-FLAGS        = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹"}
-COUNTRY_NAMES = {"ES": "Spain", "FR": "France", "DE": "Germany", "IT": "Italy"}
+MARKETPLACES = ["ES", "FR", "DE", "IT"]   # Amazon SP-API synced markets
+# Extended set used by Forecast and Reorder Planner (includes channels not pulled via SP-API)
+EXTENDED_MARKETS = ["ES", "FR", "DE", "IT", "NL", "BE", "IE", "TT"]
+FLAGS = {
+    "ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹",
+    "NL": "🇳🇱", "BE": "🇧🇪", "IE": "🇮🇪", "TT": "🎵",
+}
+COUNTRY_NAMES = {
+    "ES": "Spain", "FR": "France", "DE": "Germany", "IT": "Italy",
+    "NL": "Netherlands", "BE": "Belgium", "IE": "Ireland", "TT": "TikTok",
+}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -372,7 +380,9 @@ def _forecast_vel_per_country() -> dict[tuple, float]:
         if not isinstance(info, dict) or "data" not in info:
             continue
         df = info["data"]
-        for mp in ["ES", "FR", "DE", "IT"]:
+        # Only use Amazon-EU markets here — this feeds the per-country inventory
+        # rows on the Inventory tab, which is FBA-only.
+        for mp in MARKETPLACES:
             if mp not in df.columns:
                 continue
             units = 0.0
@@ -849,6 +859,7 @@ def render_sidebar():
                      ("📋", "Orders",         "orders"),
                      ("🏷️", "Labels",         "labels"),
                      ("🏠", "Local Stock",    "local"),
+                     ("🎵", "TikTok",         "tiktok"),
                      ("📈", "Forecast",       "forecast"),
                      ("⚙️", "Settings",       "settings")]
 
@@ -1933,6 +1944,217 @@ def render_local_stock_page(inventory_rows: list[dict]):
                 st.error(f"CSV parse error: {e}")
 
 
+# ══════════════════════════════════════════════════════════════
+# TIKTOK STOCK  (bottles at TikTok fulfillment — manual until API)
+# ══════════════════════════════════════════════════════════════
+
+def _load_tiktok_stock() -> dict[str, dict]:
+    """Return dict[asin] -> {units, updated_at, notes}. Empty if table missing."""
+    if DEMO_MODE:
+        return {}
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        rows = adm.table("tiktok_stock").select("*").execute().data or []
+        return {r["asin"]: r for r in rows}
+    except Exception:
+        return {}
+
+
+def _save_tiktok_stock(asin: str, units: int, notes: str = "") -> bool:
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        adm.table("tiktok_stock").upsert(
+            {
+                "asin":       asin,
+                "units":      int(units),
+                "notes":      notes or None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="asin",
+        ).execute()
+        return True
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+        return False
+
+
+def render_tiktok_page(inventory_rows: list[dict]):
+    """TikTok inventory tracking — manual until API access is approved."""
+    st.markdown("#### 🎵 TikTok Inventory")
+    st.caption(
+        "Bottles at TikTok fulfillment / your TikTok-allocated stock. Manually maintained "
+        "until the TikTok Shop API is wired up (in approval). The **forecast** for TikTok "
+        "comes from the `TT` column in your Google Sheet — add it there and it flows into "
+        "the Reorder Planner automatically."
+    )
+
+    if DEMO_MODE:
+        st.info("Connect Supabase to manage TikTok inventory.", icon="🧪")
+        return
+
+    stock_map = _load_tiktok_stock()
+    asin_name = {r["asin"]: r["name"] for r in inventory_rows}
+    all_asins = [r["asin"] for r in inventory_rows]
+
+    # ── Pull TikTok forecast for this ASIN if available ─────────
+    try:
+        forecast_data = load_forecast()
+        if "_error" in forecast_data:
+            forecast_data = {}
+    except Exception:
+        forecast_data = {}
+
+    # ── Summary cards ─────────────────────────────────────────
+    total_units = sum(int((stock_map.get(a, {}) or {}).get("units") or 0) for a in all_asins)
+    asins_with_stock = sum(
+        1 for a in all_asins if int((stock_map.get(a, {}) or {}).get("units") or 0) > 0
+    )
+    asins_with_fc = sum(
+        1 for a in all_asins
+        if a in forecast_data and "TT" in (forecast_data[a].get("data").columns
+                                            if forecast_data[a].get("data") is not None else [])
+    )
+
+    cards_html = f'''
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+  <div style="background:#FCE7F3;border:1px solid #F5A8D0;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#9D174D;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Total TikTok stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_units:,}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">bottles at TikTok</div>
+  </div>
+  <div style="background:#F4F4F2;border:1px solid #E0E0E0;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{asins_with_stock}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">selling on TikTok</div>
+  </div>
+  <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with TT forecast</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{asins_with_fc}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">add a TT column in the sheet</div>
+  </div>
+</div>'''
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # ── Tabs ──────────────────────────────────────────────────
+    t_view, t_import = st.tabs(["📊 Overview & edit", "📥 Import CSV"])
+
+    # ── Tab 1: Editable table ─────────────────────────────────
+    with t_view:
+        st.caption(
+            "Edit **TikTok units** inline, then click **Save**. "
+            "Subtracts from supplier reorder need automatically."
+        )
+
+        # Build display rows, with optional TT-forecast preview if available
+        rows_view = []
+        for asin in all_asins:
+            row = stock_map.get(asin, {}) or {}
+            updated = row.get("updated_at")
+            try:
+                updated_lbl = pd.to_datetime(updated).strftime("%Y-%m-%d") if updated else ""
+            except Exception:
+                updated_lbl = ""
+            units = int(row.get("units") or 0)
+
+            # TikTok forecast next 30 days (sum)
+            fc = forecast_data.get(asin, {}).get("data")
+            tt_next30 = 0
+            tt_vel    = 0.0
+            if fc is not None and "TT" in fc.columns:
+                today_d = date.today()
+                cur_ym  = today_d.strftime("%Y-%m")
+                if cur_ym in fc.index:
+                    tt_next30 = int(fc.loc[cur_ym, "TT"])
+                    tt_vel    = round(tt_next30 / 30, 2)
+
+            days_left = round(units / tt_vel, 1) if tt_vel > 0 else (9999 if units > 0 else 0)
+            days_lbl  = f"{days_left:.0f}d" if 0 < days_left < 9999 else ("∞" if units > 0 else "—")
+
+            rows_view.append({
+                "ASIN":         asin,
+                "Product":      asin_name.get(asin, asin)[:55],
+                "TikTok units": units,
+                "TT fc /day":   tt_vel,
+                "Days left":    days_lbl,
+                "Last updated": updated_lbl,
+                "Notes":        row.get("notes") or "",
+            })
+        df_view = pd.DataFrame(rows_view)
+
+        edited = st.data_editor(
+            df_view,
+            column_config={
+                "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
+                "Product":      st.column_config.TextColumn("Product", disabled=True, width="large"),
+                "TikTok units": st.column_config.NumberColumn(
+                                    "TikTok units", min_value=0, step=10,
+                                    help="Units at TikTok fulfillment / allocated to TikTok."),
+                "TT fc /day":   st.column_config.NumberColumn(
+                                    "TT fc /day", format="%.2f", disabled=True,
+                                    help="Current month TikTok forecast ÷ 30 (from Google Sheet TT column)."),
+                "Days left":    st.column_config.TextColumn("Days left", disabled=True,
+                                    help="TikTok units ÷ TT forecast/day"),
+                "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
+                "Notes":        st.column_config.TextColumn("Notes"),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="tiktok_stock_editor",
+            num_rows="fixed",
+        )
+
+        if st.button("💾 Save changes", type="primary", key="save_tiktok_stock"):
+            saved = 0
+            for i, row in edited.iterrows():
+                new_units = int(row["TikTok units"])
+                new_notes = str(row["Notes"] or "")
+                old_units = int(df_view.iloc[i]["TikTok units"])
+                old_notes = str(df_view.iloc[i]["Notes"] or "")
+                if new_units != old_units or new_notes != old_notes:
+                    if _save_tiktok_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
+                        saved += 1
+            if saved > 0:
+                st.success(f"Updated {saved} ASIN(s)")
+                st.rerun()
+            else:
+                st.info("No changes to save.")
+
+    # ── Tab 2: Import CSV ─────────────────────────────────────
+    with t_import:
+        st.markdown(
+            "Upload a CSV with columns: `asin`, `units`, optionally `notes`. "
+            "Each row upserts that ASIN's TikTok stock."
+        )
+        uploaded = st.file_uploader("Pick a CSV file", type=["csv"], key="tt_csv")
+        if uploaded is not None:
+            try:
+                df_imp = pd.read_csv(uploaded)
+                df_imp.columns = [c.strip().lower().replace(" ", "_") for c in df_imp.columns]
+                required_cols = {"asin", "units"}
+                if not required_cols.issubset(set(df_imp.columns)):
+                    st.error(f"CSV missing required columns: {required_cols - set(df_imp.columns)}")
+                else:
+                    st.dataframe(df_imp.head(20), use_container_width=True)
+                    if st.button("💾 Import all rows", type="primary", key="import_tt_btn"):
+                        saved = 0
+                        for _, row in df_imp.iterrows():
+                            notes_val = (str(row["notes"])
+                                         if "notes" in df_imp.columns and pd.notna(row.get("notes"))
+                                         else "")
+                            if _save_tiktok_stock(
+                                str(row["asin"]).strip(),
+                                int(row["units"]),
+                                notes_val,
+                            ):
+                                saved += 1
+                        st.success(f"Imported / updated {saved} ASINs.")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"CSV parse error: {e}")
+
+
 def render_orders_page(inventory_rows: list[dict]):
     from datetime import date as _date
     import io as _io
@@ -2283,13 +2505,19 @@ def render_reorder_planner(rows: list[dict]):
             unsafe_allow_html=True,
         )
 
-    # ── Local stock available for supply ───────────────────────
-    # Bottles at the user's own warehouse reduce what we need to order from
-    # the supplier. Applied per-ASIN, first-come-first-served across countries.
-    local_stock_map = _load_local_stock()
+    # ── Off-Amazon supply: local warehouse + TikTok inventory ───────────────
+    # Both reduce what we need to order from the supplier (subtract from total
+    # demand). TikTok is tracked manually until the TikTok API is approved.
+    local_stock_map  = _load_local_stock()
+    tiktok_stock_map = _load_tiktok_stock()
+    all_asins_set    = {r["asin"] for r in rows}
     local_remaining = {
         asin: int((local_stock_map.get(asin, {}) or {}).get("units") or 0)
-        for asin in {r["asin"] for r in rows}
+        for asin in all_asins_set
+    }
+    tiktok_remaining = {
+        asin: int((tiktok_stock_map.get(asin, {}) or {}).get("units") or 0)
+        for asin in all_asins_set
     }
 
     # ── Build needs table (EU-AGGREGATED — one row per ASIN) ──────
@@ -2307,6 +2535,7 @@ def render_reorder_planner(rows: list[dict]):
         fcast    = forecast_data.get(asin, {}).get("data")   # DataFrame or None
         on_order = int(r.get("on_order", 0))                  # EU total from POs
         local    = int(local_remaining.get(asin, 0))          # at user's warehouse
+        tt_stock = int(tiktok_remaining.get(asin, 0))         # at TikTok fulfillment
 
         # EU totals from r and its countries
         total_stock   = int(r.get("total_avail",   0))
@@ -2315,28 +2544,30 @@ def render_reorder_planner(rows: list[dict]):
         total_vel_fc  = float(r.get("avg_vel_fcst", 0))       # sum of forecast-based velocities (3M)
 
         if fcast is not None:
+            # Use ALL forecast columns (ES/FR/DE/IT + NL/BE/IE/TT if present), since
+            # the user buys one PO from the supplier for total demand across channels.
+            fc_cols = list(fcast.columns)
+
             # Skip ASIN with zero demand anywhere
             total_fc_anywhere = sum(
                 int(fcast.loc[_mk(i), mp])
                 for i in range(18)
-                for mp in MARKETPLACES
-                if _mk(i) in fcast.index and mp in fcast.columns
+                for mp in fc_cols
+                if _mk(i) in fcast.index
             )
             if total_stock == 0 and total_vel == 0 and total_fc_anywhere == 0:
                 continue
 
             # ── Forecast path ─────────────────────────────────
-            # Walk EU total forecast; supply = stock + inbound + on_order + local
-            remaining   = total_stock + total_inbound + on_order + local
+            # Walk total forecast across all channels; supply = FBA + inbound + on_order + local
+            # (TikTok inventory will get its own subtraction once we add manual entry)
+            remaining   = total_stock + total_inbound + on_order + local + tt_stock
             stockout_ym = None
             for offset in range(20):
                 mk = _mk(offset)
                 if mk not in fcast.index:
                     break
-                month_demand = sum(
-                    int(fcast.loc[mk, mp]) for mp in MARKETPLACES
-                    if mp in fcast.columns
-                )
+                month_demand = sum(int(fcast.loc[mk, mp]) for mp in fc_cols)
                 remaining -= month_demand
                 if remaining < 0:
                     stockout_ym = mk
@@ -2353,15 +2584,13 @@ def render_reorder_planner(rows: list[dict]):
                 stockout_lbl  = "OK through forecast"
                 order_by_lbl  = "—"
 
-            # Reorder qty = EU forecast window − all current supply.
-            # local stock applied here so the displayed Reorder units already
-            # account for what the user can fulfill themselves.
+            # Reorder qty = total forecast window − all current supply
             months_ahead = max(2, _math.ceil((lead + target) / 30))
             fc_window    = sum(
                 int(fcast.loc[_mk(i), mp])
                 for i in range(months_ahead)
-                for mp in MARKETPLACES
-                if _mk(i) in fcast.index and mp in fcast.columns
+                for mp in fc_cols
+                if _mk(i) in fcast.index
             )
             reorder_qty  = max(0, fc_window - total_stock - total_inbound - on_order - local)
             source       = "📈 Forecast"
@@ -2369,7 +2598,7 @@ def render_reorder_planner(rows: list[dict]):
             # ── Velocity fallback ─────────────────────────────
             if total_stock == 0 and total_vel == 0:
                 continue
-            days_left     = round((total_stock + total_inbound + on_order + local) / total_vel, 1) \
+            days_left     = round((total_stock + total_inbound + on_order + local + tt_stock) / total_vel, 1) \
                              if total_vel > 0 else 9999.0
             days_to_order = round(days_left - lead, 0)
             reorder_qty   = max(0, int((target - days_left) * total_vel)) \
@@ -2393,7 +2622,11 @@ def render_reorder_planner(rows: list[dict]):
 
         # Only show rows that need attention (within REORDER_FILTER_DAYS)
         if days_to_order <= REORDER_FILTER_DAYS:
-            local_used = min(local, reorder_qty) if reorder_qty > 0 else 0  # for display
+            # Display how much off-Amazon supply was applied per ASIN
+            off_amz_pool = local + tt_stock
+            applied      = min(off_amz_pool, reorder_qty + local + tt_stock) if (local + tt_stock) > 0 else 0
+            local_used   = min(local, applied)
+            tt_used      = min(tt_stock, applied - local_used)
             needs.append({
                 "Product":       r["name"],
                 "Source":        source,
@@ -2401,6 +2634,7 @@ def render_reorder_planner(rows: list[dict]):
                 "Inbound":       total_inbound,
                 "On order 📦":   on_order,
                 "🏠 Local":      local_used,
+                "🎵 TikTok":     tt_used,
                 "Vel/day (30d)": round(total_vel, 1),
                 "Vel/day (3M)":  round(total_vel_fc, 1),
                 "Stockout est.": stockout_lbl,
@@ -2436,7 +2670,7 @@ def render_reorder_planner(rows: list[dict]):
     )
 
     # ── Editable table ─────────────────────────────────────────
-    display_cols = ["Product","Source","Stock (EU)","Inbound","On order 📦","🏠 Local",
+    display_cols = ["Product","Source","Stock (EU)","Inbound","On order 📦","🏠 Local","🎵 TikTok",
                     "Vel/day (30d)","Vel/day (3M)",
                     "Stockout est.","Order by","Days to order","Alert","Reorder units"]
     df_show = pd.DataFrame(needs)[display_cols]
@@ -2453,6 +2687,8 @@ def render_reorder_planner(rows: list[dict]):
                              help="Units ordered from supplier (ordered+shipped POs)"),
             "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True,
                              help="Units at your warehouse already counted against this reorder"),
+            "🎵 TikTok":     st.column_config.NumberColumn("🎵 TikTok",     disabled=True,
+                             help="Units at TikTok fulfillment already counted against this reorder"),
             "Vel/day (30d)": st.column_config.NumberColumn("Vel/day (30d)", format="%.1f", disabled=True,
                              help="Last 30 days of actual sales ÷ 30 (EU total, sum across countries)"),
             "Vel/day (3M)":  st.column_config.NumberColumn("Vel/day (3M)",  format="%.1f", disabled=True,
@@ -2616,38 +2852,55 @@ def render_forecast_page(rows: list[dict]):
         product   = forecast_data[selected_asin]
         df        = product["data"].copy()
 
-        # Filter to ≤ Dec 2026 and from today onwards
-        today_ym  = date.today().strftime("%Y-%m")
-        df        = df[(df.index >= today_ym) & (df.index <= "2026-12")]
+        # Show 2 past months (actuals) + current + future up to Dec 2026
+        today_d   = date.today()
+        # Compute 2-months-ago YYYY-MM
+        py, pm = today_d.year, today_d.month - 2
+        while pm < 1:
+            pm += 12
+            py -= 1
+        start_ym  = f"{py:04d}-{pm:02d}"
+        today_ym  = today_d.strftime("%Y-%m")
+        df        = df[(df.index >= start_ym) & (df.index <= "2026-12")]
 
         if df.empty:
             st.info("No forecast data for this period.")
         else:
-            # Pretty month labels
+            # Pretty month labels (also keep the YYYY-MM for past/future logic)
             def fmt_month(ym: str) -> str:
                 try:
-                    dt = datetime.strptime(ym, "%Y-%m")
-                    return dt.strftime("%b %Y")
+                    return datetime.strptime(ym, "%Y-%m").strftime("%b %Y")
                 except Exception:
                     return ym
 
-            # Build display: countries as rows, months as columns
-            display = df.copy()
-            display.columns = ["🇪🇸 ES", "🇫🇷 FR", "🇩🇪 DE", "🇮🇹 IT"]
-            display.index = [fmt_month(m) for m in display.index]
+            month_keys     = list(df.index)
+            month_labels   = [fmt_month(m) for m in month_keys]
+            past_month_set = {fmt_month(m) for m in month_keys if m < today_ym}
+
+            # Build display: dynamic columns based on what the forecast sheet has
+            country_codes = list(df.columns)
+            display       = df.copy()
+            display.columns = [f"{FLAGS.get(c, '')} {c}".strip() for c in country_codes]
+            display.index   = month_labels
             display["TOTAL"] = display.sum(axis=1)
-            display = display.astype(int).T   # single transpose → countries=rows, months=cols
+            display          = display.astype(int).T   # rows=countries, cols=months
             display.index.name = "Country"
 
             month_cols = list(display.columns)
 
-            # Header cells — light grey bg, bold black text
-            header_cells = "".join(
-                f'<th style="background:#F4F4F2;color:#111;font-weight:700;'
-                f'font-size:12px;padding:9px 12px;text-align:right;'
-                f'white-space:nowrap;border-bottom:2px solid #E0E0E0">{c}</th>'
-                for c in month_cols
-            )
+            # Header cells — past months tinted green to mark "actuals"
+            header_cells = ""
+            for c in month_cols:
+                is_past = c in past_month_set
+                bg = "#E8F5D8" if is_past else "#F4F4F2"
+                color = "#3B6D11" if is_past else "#111"
+                tag = " · actual" if is_past else ""
+                header_cells += (
+                    f'<th style="background:{bg};color:{color};font-weight:700;'
+                    f'font-size:12px;padding:9px 12px;text-align:right;'
+                    f'white-space:nowrap;border-bottom:2px solid #E0E0E0" '
+                    f'title="Past month — actual sales{tag}">{c}</th>'
+                )
 
             # Data rows
             html_rows = ""
@@ -2662,13 +2915,39 @@ def render_forecast_page(rows: list[dict]):
                     f'font-size:12px;padding:9px 12px;white-space:nowrap;'
                     f'border-right:1px solid #E0E0E0;{border}">{idx}</td>'
                 )
-                data_cells = "".join(
-                    f'<td style="background:{row_bg};font-weight:{row_fw};color:{row_col};'
-                    f'font-size:13px;padding:9px 12px;text-align:right;{border}">'
-                    f'{int(v):,}</td>'
-                    for v in row
-                )
+                data_cells = ""
+                for c, v in zip(month_cols, row):
+                    is_past = c in past_month_set
+                    cell_bg = "#F0F8E5" if is_past and not is_total else row_bg
+                    data_cells += (
+                        f'<td style="background:{cell_bg};font-weight:{row_fw};color:{row_col};'
+                        f'font-size:13px;padding:9px 12px;text-align:right;{border}">'
+                        f'{int(v):,}</td>'
+                    )
                 html_rows += f'<tr>{idx_cell}{data_cells}</tr>\n'
+
+            # MoM growth row (on TOTAL across months)
+            totals = list(display.loc["TOTAL"])
+            mom_cells = ""
+            for i, c in enumerate(month_cols):
+                if i == 0 or totals[i-1] == 0:
+                    val_html = "—"
+                    color    = "#999"
+                else:
+                    pct = (totals[i] - totals[i-1]) / totals[i-1] * 100
+                    color = ("#3B6D11" if pct > 0 else "#A32D2D" if pct < 0 else "#666")
+                    val_html = f'{pct:+.1f}%'
+                mom_cells += (
+                    f'<td style="background:#FAFAFA;color:{color};font-weight:600;'
+                    f'font-size:12px;padding:7px 12px;text-align:right;'
+                    f'border-top:1px solid #E0E0E0">{val_html}</td>'
+                )
+            mom_idx_cell = (
+                '<td style="background:#F4F4F2;font-weight:700;color:#111;'
+                'font-size:11px;padding:7px 12px;white-space:nowrap;'
+                'border-right:1px solid #E0E0E0;border-top:1px solid #E0E0E0">% MoM</td>'
+            )
+            html_rows += f'<tr>{mom_idx_cell}{mom_cells}</tr>\n'
 
             forecast_html = f"""
 <div style="overflow-x:auto;border-radius:10px;border:1px solid #E8E8E8;
@@ -3302,6 +3581,10 @@ elif page == "labels":
 # ════════ PAGE: LOCAL STOCK ════════
 elif page == "local":
     render_local_stock_page(rows)
+
+# ════════ PAGE: TIKTOK ════════
+elif page == "tiktok":
+    render_tiktok_page(rows)
 
 # ════════ PAGE: FORECAST ════════
 elif page == "forecast":

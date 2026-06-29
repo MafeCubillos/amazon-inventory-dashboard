@@ -31,11 +31,26 @@ SHEET_ID    = os.getenv("GOOGLE_SHEET_ID", "10ED9_5s_UY_y2Eqs3LAt4xgyJaVQCIkqyAM
 IGNORE_TABS = {"inputs crec mom"}
 
 COUNTRY_MAP: dict[str, str] = {
-    "españa":  "ES",
-    "espana":  "ES",
-    "italia":  "IT",
-    "alemania":"DE",
-    "francia": "FR",
+    # Amazon EU core (synced via SP-API)
+    "españa":         "ES",
+    "espana":         "ES",
+    "italia":         "IT",
+    "alemania":       "DE",
+    "francia":        "FR",
+    # Amazon EU expansion (forecast-only)
+    "holanda":        "NL",
+    "países bajos":   "NL",
+    "paises bajos":   "NL",
+    "netherlands":    "NL",
+    "bélgica":        "BE",
+    "belgica":        "BE",
+    "belgium":        "BE",
+    "irlanda":        "IE",
+    "ireland":        "IE",
+    # Other channels
+    "tiktok":         "TT",
+    "tik tok":        "TT",
+    "tt":             "TT",
 }
 
 _ES_MONTHS: dict[str, int] = {
@@ -225,16 +240,19 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
     if not country_rows:
         return None
 
-    # Build DataFrame: index = month, columns = country codes
+    # Build DataFrame: index = month, columns = whatever country codes were found
+    # (ES/FR/DE/IT for Amazon core, plus NL/BE/IE/TT if the sheet has them).
     all_months = sorted(set(m for v in country_rows.values() for m in v))
-    records    = {m: {c: country_rows.get(c, {}).get(m, 0) for c in ["ES","FR","DE","IT"]}
+    all_codes  = sorted(country_rows.keys())
+    records    = {m: {c: country_rows.get(c, {}).get(m, 0) for c in all_codes}
                   for m in all_months}
     df = pd.DataFrame(records).T.sort_index()
     df.index.name = "month"
-    for c in ["ES", "FR", "DE", "IT"]:
-        if c not in df.columns:
-            df[c] = 0
-    return df[["ES", "FR", "DE", "IT"]].round(0).astype(int)
+    # Preferred display order: Amazon core first, then expansion, then channels
+    preferred = ["ES", "FR", "DE", "IT", "NL", "BE", "IE", "TT"]
+    cols = [c for c in preferred if c in df.columns] + \
+           [c for c in df.columns if c not in preferred]
+    return df[cols].round(0).astype(int)
 
 
 # ── Public API ────────────────────────────────────────────────────
