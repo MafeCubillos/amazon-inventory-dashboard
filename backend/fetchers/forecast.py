@@ -274,6 +274,52 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
 
 # ── Public API ────────────────────────────────────────────────────
 
+def fetch_forecast_debug_labels() -> dict[str, list[str]]:
+    """Return dict[asin] -> list of raw row labels read from column B,
+    BELOW the header row of each tab. Used by the dashboard's debug expander
+    to diagnose why countries aren't being detected.
+    """
+    gc = _get_client()
+    sh = gc.open_by_key(SHEET_ID)
+
+    out: dict[str, list[str]] = {}
+    for ws in sh.worksheets():
+        tab = ws.title.strip()
+        if tab.lower().strip() in IGNORE_TABS:
+            continue
+        if "_" not in tab:
+            continue
+        parts = tab.split("_", 1)
+        asin  = parts[0].strip()
+
+        try:
+            rows = ws.get_all_values()
+            # Find "Escenario Base" header
+            base_idx = None
+            for i, row in enumerate(rows):
+                for cell in row:
+                    if "escenario base" in cell.strip().lower():
+                        base_idx = i
+                        break
+                if base_idx is not None:
+                    break
+            if base_idx is None:
+                continue
+            header_idx = base_idx + 1
+            labels = []
+            for row in rows[header_idx + 1:][:20]:  # first 20 rows below header
+                if not row or len(row) <= 1:
+                    labels.append("(empty row)")
+                    continue
+                label = row[1].strip() if len(row) > 1 else ""
+                labels.append(label if label else "(empty)")
+            out[asin] = labels
+        except Exception as e:
+            out[asin] = [f"(error: {e})"]
+
+    return out
+
+
 def fetch_forecast() -> dict[str, dict]:
     gc = _get_client()
     sh = gc.open_by_key(SHEET_ID)

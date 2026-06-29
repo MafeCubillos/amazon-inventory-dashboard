@@ -2845,12 +2845,24 @@ def render_forecast_page(rows: list[dict]):
                 "n":        len(cols),
             })
         st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("**Raw row labels read from each tab (column B, first 20 rows below header):**")
+        if st.button("🔍 Inspect raw rows from Google Sheet", key="dbg_raw"):
+            with st.spinner("Reading sheet…"):
+                try:
+                    from backend.fetchers.forecast import fetch_forecast_debug_labels
+                    raw_labels = fetch_forecast_debug_labels()
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+                    raw_labels = {}
+            for asin, labels in raw_labels.items():
+                st.markdown(f"**{asin}** — `{labels}`")
         st.caption(
-            "If you see only `ES, FR, DE, IT` for an ASIN that has new rows "
-            "(Holanda, Bélgica, etc.) in the sheet, the parser isn't picking them "
-            "up. Possible causes: Streamlit Cloud hasn't redeployed the latest "
-            "code yet, or the row label in the sheet doesn't match the parser's "
-            "spelling list (see app.py COUNTRY_MAP)."
+            "Look at the labels for an ASIN that's missing Holanda/Bélgica/etc. "
+            "If those labels show up here but the parser dropped them, the "
+            "spelling probably doesn't match the COUNTRY_MAP keys in app.py. "
+            "Tell me the exact string and I'll add the variant."
         )
 
     st.divider()
