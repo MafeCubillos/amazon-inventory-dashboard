@@ -2831,6 +2831,28 @@ def render_forecast_page(rows: list[dict]):
         st.caption(f"Loaded {len(forecast_data)} products from Google Sheet · "
                    "Press **Sync Sheet** to refresh after changes.")
 
+    # ── Debug — show which country columns each ASIN has ──────
+    with st.expander("🔧 Debug: which channels were detected per ASIN?", expanded=False):
+        debug_rows = []
+        for asin, info in forecast_data.items():
+            if not isinstance(info, dict):
+                continue
+            df_dbg = info.get("data")
+            cols   = list(df_dbg.columns) if df_dbg is not None else []
+            debug_rows.append({
+                "ASIN":     asin,
+                "Channels": ", ".join(cols) if cols else "(none)",
+                "n":        len(cols),
+            })
+        st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            "If you see only `ES, FR, DE, IT` for an ASIN that has new rows "
+            "(Holanda, Bélgica, etc.) in the sheet, the parser isn't picking them "
+            "up. Possible causes: Streamlit Cloud hasn't redeployed the latest "
+            "code yet, or the row label in the sheet doesn't match the parser's "
+            "spelling list (see app.py COUNTRY_MAP)."
+        )
+
     st.divider()
 
     # ══════════════════════════════════════════════════════════
