@@ -155,12 +155,19 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
 
     Structure: rows = countries, columns = months.
     """
-    # Step 1 — find the "Escenario Base" title row
+    # Step 1 — find the "Escenario Base" title cell (row AND column).
+    # We also note the column of the NEXT scenario label ("Escenario Optimista"
+    # / "Escenario Conservador") in the same row so we can restrict month
+    # columns to Base's range only — sheets often place scenarios side-by-side
+    # with shared País/Baseline columns, and without this restriction the
+    # later scenario's values overwrite Base's via the shared month keys.
     base_row_idx: int | None = None
+    base_col_idx: int = 0
     for i, row in enumerate(rows):
-        for cell in row:
+        for j, cell in enumerate(row):
             if "escenario base" in cell.strip().lower():
                 base_row_idx = i
+                base_col_idx = j
                 break
         if base_row_idx is not None:
             break
@@ -168,6 +175,15 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
     if base_row_idx is None:
         logger.warning("'Escenario Base' not found")
         return None
+
+    # Find the next "Escenario X" cell after Base in the same row, if any
+    next_scenario_col: int | None = None
+    base_label_row = rows[base_row_idx]
+    for j in range(base_col_idx + 1, len(base_label_row)):
+        cell_lc = base_label_row[j].strip().lower()
+        if cell_lc.startswith("escenario") and "base" not in cell_lc:
+            next_scenario_col = j
+            break
 
     # Step 2 — the very next row is the header with month column names
     header_idx = base_row_idx + 1
@@ -201,6 +217,12 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
 
     month_cols: dict[int, str] = {}
     for j, cell in enumerate(header_row):
+        # Restrict to Base scenario's column range: [base_col_idx, next_scenario_col)
+        # If Base spans the whole sheet (no other scenario), next_scenario_col is None.
+        if j < base_col_idx:
+            continue
+        if next_scenario_col is not None and j >= next_scenario_col:
+            break
         ym = _parse_month_header(cell, plain_year if "/" not in cell else cur_year)
         if ym:
             month_cols[j] = ym
