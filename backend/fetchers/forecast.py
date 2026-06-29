@@ -210,21 +210,38 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
         return None
 
     # Step 3 — read country rows below the header
+    # NOTE: we SKIP (continue) on "total"/"escenario" rows rather than breaking,
+    # because the user puts new channels (TikTok, Holanda, Bélgica, Irlanda)
+    # AFTER the Total row in the sheet. "tiktok" used to be a stop word but is
+    # now a legitimate channel — we want to capture its row, not skip past it.
     COUNTRY_COL = 1          # Country names are in column B (index 1)
-    STOP_WORDS  = {"total", "prom", "tiktok", "escenario", "promedio"}
+    SKIP_WORDS  = {"total", "prom", "escenario", "promedio"}
 
     # data: country_code → {month_key: value}
     country_rows: dict[str, dict[str, float]] = {}
 
+    # Stop only when we've gone too far (e.g. empty rows after the last data row).
+    consecutive_blanks = 0
+    MAX_BLANKS = 5   # 5 blank rows in a row → end of table
+
     for row in rows[header_idx + 1:]:
         if not row or len(row) <= COUNTRY_COL:
+            consecutive_blanks += 1
+            if consecutive_blanks >= MAX_BLANKS:
+                break
             continue
 
         name_raw = row[COUNTRY_COL].strip().lower().rstrip()
-        # Stop at Total / new section
-        if any(name_raw.startswith(w) for w in STOP_WORDS):
-            break
         if not name_raw:
+            consecutive_blanks += 1
+            if consecutive_blanks >= MAX_BLANKS:
+                break
+            continue
+
+        consecutive_blanks = 0
+
+        # Skip aggregate / placeholder rows (Total, Promedio, Escenario X)
+        if any(name_raw.startswith(w) for w in SKIP_WORDS):
             continue
 
         code = COUNTRY_MAP.get(name_raw)
