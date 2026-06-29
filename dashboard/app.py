@@ -2847,6 +2847,28 @@ def render_forecast_page(rows: list[dict]):
         st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
 
         st.markdown("---")
+        st.markdown("**Parser version marker (helps confirm latest deploy is live):**")
+        st.code("PARSER_VERSION=v3_break_at_escenario_2026-06-11", language="text")
+
+        st.markdown("**Show actual parsed data (what the parser captured):**")
+        asin_to_show = st.selectbox(
+            "ASIN to inspect",
+            options=sorted(forecast_data.keys()),
+            key="dbg_show_asin",
+        )
+        if asin_to_show:
+            data = forecast_data.get(asin_to_show, {}).get("data")
+            if data is not None:
+                st.dataframe(data.T, use_container_width=True)
+                st.caption(
+                    f"Columns: {list(data.columns)}. If the values here are wrong, the "
+                    "parser is reading the wrong scenario. If the values are correct here "
+                    "but wrong in the Forecast Viewer above, the display is filtering/transforming."
+                )
+            else:
+                st.warning("No data available for this ASIN.")
+
+        st.markdown("---")
         st.markdown("**Raw row labels read from each tab (column B, first 20 rows below header):**")
         if st.button("🔍 Inspect raw rows from Google Sheet", key="dbg_raw"):
             with st.spinner("Reading sheet…"):
