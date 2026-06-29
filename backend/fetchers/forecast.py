@@ -210,19 +210,22 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
         return None
 
     # Step 3 — read country rows below the header
-    # NOTE: we SKIP (continue) on "total"/"escenario" rows rather than breaking,
-    # because the user puts new channels (TikTok, Holanda, Bélgica, Irlanda)
-    # AFTER the Total row in the sheet. "tiktok" used to be a stop word but is
-    # now a legitimate channel — we want to capture its row, not skip past it.
+    # We SKIP aggregate rows (Total, Prom x día, Total con TIKTOK) so the parser
+    # can still reach channel rows the user adds AFTER the Total row (e.g.
+    # Holanda, Bélgica, Irlanda, TikTok in their current layout).
+    # We BREAK when a new "Escenario X" header appears — that's the start of
+    # the next scenario (Conservador / Optimista / etc.) and reading past it
+    # would overwrite Base values.
     COUNTRY_COL = 1          # Country names are in column B (index 1)
-    SKIP_WORDS  = {"total", "prom", "escenario", "promedio"}
+    SKIP_WORDS  = {"total", "prom", "promedio"}
+    BREAK_WORDS = {"escenario"}   # next scenario starts → done
 
     # data: country_code → {month_key: value}
     country_rows: dict[str, dict[str, float]] = {}
 
-    # Stop only when we've gone too far (e.g. empty rows after the last data row).
+    # Also bail out after a few blank rows in a row (no more data below).
     consecutive_blanks = 0
-    MAX_BLANKS = 5   # 5 blank rows in a row → end of table
+    MAX_BLANKS = 5
 
     for row in rows[header_idx + 1:]:
         if not row or len(row) <= COUNTRY_COL:
@@ -240,7 +243,11 @@ def _parse_base_scenario(rows: list[list[str]]) -> pd.DataFrame | None:
 
         consecutive_blanks = 0
 
-        # Skip aggregate / placeholder rows (Total, Promedio, Escenario X)
+        # Stop completely if we've reached the next scenario header
+        if any(name_raw.startswith(w) for w in BREAK_WORDS):
+            break
+
+        # Skip aggregate / placeholder rows within the same scenario
         if any(name_raw.startswith(w) for w in SKIP_WORDS):
             continue
 
