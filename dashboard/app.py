@@ -2292,121 +2292,127 @@ def render_reorder_planner(rows: list[dict]):
         for asin in {r["asin"] for r in rows}
     }
 
-    # ── Build needs table ──────────────────────────────────────
+    # ── Build needs table (EU-AGGREGATED — one row per ASIN) ──────
+    # We sum across countries because the user places one PO with a total unit
+    # count from the supplier, not per-country POs. This avoids the previous
+    # bug where the EU-total on_order was added to each country's supply
+    # (counted 4x), masking real reorder needs.
     needs = []
+    REORDER_FILTER_DAYS = 90   # bumped from 45 → 90 to give more lead-time visibility
 
     for r in rows:
-        asin   = r["asin"]
-        lead   = r.get("lead",   30)
-        target = r.get("target", 60)
-        fcast  = forecast_data.get(asin, {}).get("data")   # DataFrame or None
+        asin     = r["asin"]
+        lead     = r.get("lead",   30)
+        target   = r.get("target", 60)
+        fcast    = forecast_data.get(asin, {}).get("data")   # DataFrame or None
+        on_order = int(r.get("on_order", 0))                  # EU total from POs
+        local    = int(local_remaining.get(asin, 0))          # at user's warehouse
 
-        for c in r["countries"]:
-            mp      = c["mp"]
-            flag    = c["flag"]
-            stock   = c["avail"]
-            inbound = c["inbound"]
-            vel      = c["vel"]
-            on_order = r.get("on_order", 0)   # units ordered from supplier (EU total)
+        # EU totals from r and its countries
+        total_stock   = int(r.get("total_avail",   0))
+        total_inbound = int(r.get("total_inbound", 0))
+        total_vel     = float(r.get("avg_vel",     0))        # already sum across countries
 
-            if fcast is not None:
-                # ── Skip country if truly no demand (0 stock, 0 vel, 0 forecast) ──
-                total_fc_country = sum(
-                    int(fcast.loc[_mk(i), mp]) if _mk(i) in fcast.index else 0
-                    for i in range(18)
+        if fcast is not None:
+            # Skip ASIN with zero demand anywhere
+            total_fc_anywhere = sum(
+                int(fcast.loc[_mk(i), mp])
+                for i in range(18)
+                for mp in MARKETPLACES
+                if _mk(i) in fcast.index and mp in fcast.columns
+            )
+            if total_stock == 0 and total_vel == 0 and total_fc_anywhere == 0:
+                continue
+
+            # ── Forecast path ─────────────────────────────────
+            # Walk EU total forecast; supply = stock + inbound + on_order + local
+            remaining   = total_stock + total_inbound + on_order + local
+            stockout_ym = None
+            for offset in range(20):
+                mk = _mk(offset)
+                if mk not in fcast.index:
+                    break
+                month_demand = sum(
+                    int(fcast.loc[mk, mp]) for mp in MARKETPLACES
+                    if mp in fcast.columns
                 )
-                if stock == 0 and vel == 0 and total_fc_country == 0:
-                    continue   # nothing to sell here, skip
+                remaining -= month_demand
+                if remaining < 0:
+                    stockout_ym = mk
+                    break
 
-                # ── Forecast path ──────────────────────────
-                # 1. Simulate stock depletion (include on_order as future supply)
-                remaining    = stock + inbound + on_order
-                stockout_ym  = None
-                for offset in range(20):
-                    mk = _mk(offset)
-                    if mk not in fcast.index:
-                        break
-                    remaining -= int(fcast.loc[mk, mp])
-                    if remaining < 0:   # strictly negative — avoids false trigger on 0-stock/0-fc
-                        stockout_ym = mk
-                        break
-
-                if stockout_ym:
-                    stockout_dt   = datetime.strptime(stockout_ym, "%Y-%m").date()
-                    order_by_dt   = stockout_dt - _td(days=lead)
-                    days_to_order = (order_by_dt - today).days
-                    stockout_lbl  = _fmt_ym(stockout_ym)
-                    order_by_lbl  = order_by_dt.strftime("%d %b %Y")
-                else:
-                    days_to_order = 9999
-                    stockout_lbl  = "OK through forecast"
-                    order_by_lbl  = "—"
-
-                # 2. Reorder qty = forecast window − on-hand − already on order
-                months_ahead = max(2, _math.ceil((lead + target) / 30))
-                fc_window    = sum(
-                    int(fcast.loc[_mk(i), mp]) if _mk(i) in fcast.index else 0
-                    for i in range(months_ahead)
-                )
-                reorder_qty  = max(0, fc_window - stock - inbound - on_order)
-                days_left    = round(stock / vel, 1) if vel > 0 else 9999
-                source       = "📈 Forecast"
-
+            if stockout_ym:
+                stockout_dt   = datetime.strptime(stockout_ym, "%Y-%m").date()
+                order_by_dt   = stockout_dt - _td(days=lead)
+                days_to_order = (order_by_dt - today).days
+                stockout_lbl  = _fmt_ym(stockout_ym)
+                order_by_lbl  = order_by_dt.strftime("%d %b %Y")
             else:
-                # ── Velocity fallback ──────────────────────
-                if stock == 0 and vel == 0:
-                    continue   # no demand in this country, skip
-                days_left     = round((stock + on_order) / vel, 1) if vel > 0 else 9999
-                days_to_order = round(days_left - lead, 0)
-                reorder_qty   = max(0, int((target - days_left) * vel)) if vel > 0 else 0
-                stockout_lbl  = fmt_days(days_left)
-                order_by_lbl  = (today + _td(days=max(0, int(days_to_order)))).strftime("%d %b %Y") \
-                                 if days_to_order < 9999 else "—"
-                source        = "📊 Velocity"
+                days_to_order = 9999
+                stockout_lbl  = "OK through forecast"
+                order_by_lbl  = "—"
 
-            # Status
-            if days_to_order <= 0:
-                alert = "🔴 Order now"
-            elif days_to_order <= 14:
-                alert = "🟡 Order soon"
-            elif days_to_order <= 45:
-                alert = "🟠 Upcoming"
-            else:
-                alert = "🟢 OK"
+            # Reorder qty = EU forecast window − all current supply.
+            # local stock applied here so the displayed Reorder units already
+            # account for what the user can fulfill themselves.
+            months_ahead = max(2, _math.ceil((lead + target) / 30))
+            fc_window    = sum(
+                int(fcast.loc[_mk(i), mp])
+                for i in range(months_ahead)
+                for mp in MARKETPLACES
+                if _mk(i) in fcast.index and mp in fcast.columns
+            )
+            reorder_qty  = max(0, fc_window - total_stock - total_inbound - on_order - local)
+            source       = "📈 Forecast"
+        else:
+            # ── Velocity fallback ─────────────────────────────
+            if total_stock == 0 and total_vel == 0:
+                continue
+            days_left     = round((total_stock + total_inbound + on_order + local) / total_vel, 1) \
+                             if total_vel > 0 else 9999.0
+            days_to_order = round(days_left - lead, 0)
+            reorder_qty   = max(0, int((target - days_left) * total_vel)) \
+                             if total_vel > 0 else 0
+            stockout_lbl  = fmt_days(days_left)
+            order_by_lbl  = (today + _td(days=max(0, int(days_to_order)))).strftime("%d %b %Y") \
+                             if days_to_order < 9999 else "—"
+            source        = "📊 Velocity"
 
-            # Apply local stock (first-come-first-served across countries).
-            # Reduces what we need from the supplier — the user can fulfill
-            # from their own warehouse first before placing a supplier order.
-            local_used = 0
-            if reorder_qty > 0 and local_remaining.get(asin, 0) > 0:
-                local_used = min(local_remaining[asin], reorder_qty)
-                reorder_qty -= local_used
-                local_remaining[asin] -= local_used
+        # Status
+        if days_to_order <= 0:
+            alert = "🔴 Order now"
+        elif days_to_order <= 14:
+            alert = "🟡 Order soon"
+        elif days_to_order <= 45:
+            alert = "🟠 Upcoming"
+        elif days_to_order <= 90:
+            alert = "🔵 Plan ahead"
+        else:
+            alert = "🟢 OK"
 
-            # Only show rows that need attention (order within 45 days or already late)
-            if days_to_order <= 45:
-                needs.append({
-                    "Product":       r["name"],
-                    "MP":            f"{flag} {mp}",
-                    "Source":        source,
-                    "Stock":         stock,
-                    "Inbound":       inbound,
-                    "On order 📦":   on_order,
-                    "🏠 Local":      local_used,
-                    "Vel/day":       round(vel, 1),
-                    "Stockout est.": stockout_lbl,
-                    "Order by":      order_by_lbl,
-                    "Days to order": int(days_to_order) if days_to_order < 9999 else 999,
-                    "Alert":         alert,
-                    "Reorder units": reorder_qty,
-                    # hidden for Excel / shipment plan
-                    "_asin":  asin,
-                    "_lead":  lead,
-                    "_mp_raw": mp,
-                })
+        # Only show rows that need attention (within REORDER_FILTER_DAYS)
+        if days_to_order <= REORDER_FILTER_DAYS:
+            local_used = min(local, reorder_qty) if reorder_qty > 0 else 0  # for display
+            needs.append({
+                "Product":       r["name"],
+                "Source":        source,
+                "Stock (EU)":    total_stock,
+                "Inbound":       total_inbound,
+                "On order 📦":   on_order,
+                "🏠 Local":      local_used,
+                "Vel/day":       round(total_vel, 1),
+                "Stockout est.": stockout_lbl,
+                "Order by":      order_by_lbl,
+                "Days to order": int(days_to_order) if days_to_order < 9999 else 999,
+                "Alert":         alert,
+                "Reorder units": reorder_qty,
+                # hidden for Excel / shipment plan
+                "_asin":  asin,
+                "_lead":  lead,
+            })
 
     if not needs:
-        st.success("✅ All products well-stocked — no orders needed in the next 45 days.")
+        st.success(f"✅ All products well-stocked — no orders needed in the next {REORDER_FILTER_DAYS} days.")
         return
 
     # Sort by urgency
@@ -2416,17 +2422,19 @@ def render_reorder_planner(rows: list[dict]):
     n_now  = sum(1 for n in needs if n["Days to order"] <= 0)
     n_soon = sum(1 for n in needs if 0 < n["Days to order"] <= 14)
     n_up   = sum(1 for n in needs if 14 < n["Days to order"] <= 45)
+    n_plan = sum(1 for n in needs if 45 < n["Days to order"] <= 90)
     st.markdown(
-        f'<div style="display:flex;gap:10px;margin-bottom:12px">'
+        f'<div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">'
         f'<span style="background:#FCEBEB;color:#A32D2D;font-weight:700;padding:4px 12px;border-radius:20px">🔴 {n_now} order now</span>'
         f'<span style="background:#FAEEDA;color:#854F0B;font-weight:700;padding:4px 12px;border-radius:20px">🟡 {n_soon} order soon (&lt;14d)</span>'
         f'<span style="background:#FFF4E5;color:#7A4F00;font-weight:700;padding:4px 12px;border-radius:20px">🟠 {n_up} upcoming (&lt;45d)</span>'
+        f'<span style="background:#E8F0FE;color:#1A56DB;font-weight:700;padding:4px 12px;border-radius:20px">🔵 {n_plan} plan ahead (&lt;90d)</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
     # ── Editable table ─────────────────────────────────────────
-    display_cols = ["Product","MP","Source","Stock","Inbound","On order 📦","🏠 Local","Vel/day",
+    display_cols = ["Product","Source","Stock (EU)","Inbound","On order 📦","🏠 Local","Vel/day",
                     "Stockout est.","Order by","Days to order","Alert","Reorder units"]
     df_show = pd.DataFrame(needs)[display_cols]
 
@@ -2434,15 +2442,16 @@ def render_reorder_planner(rows: list[dict]):
         df_show,
         column_config={
             "Product":       st.column_config.TextColumn("Product",       width="large", disabled=True),
-            "MP":            st.column_config.TextColumn("Marketplace",   disabled=True),
             "Source":        st.column_config.TextColumn("Source",        disabled=True),
-            "Stock":         st.column_config.NumberColumn("Stock",        disabled=True),
+            "Stock (EU)":    st.column_config.NumberColumn("Stock (EU)",   disabled=True,
+                             help="Total FBA inventory across all EU marketplaces"),
             "Inbound":       st.column_config.NumberColumn("Inbound",      disabled=True),
             "On order 📦":   st.column_config.NumberColumn("On order 📦",  disabled=True,
                              help="Units ordered from supplier (ordered+shipped POs)"),
             "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True,
-                             help="Units pulled from your local warehouse to reduce this reorder"),
-            "Vel/day":       st.column_config.NumberColumn("Vel/day",      format="%.1f", disabled=True),
+                             help="Units at your warehouse already counted against this reorder"),
+            "Vel/day":       st.column_config.NumberColumn("Vel/day",      format="%.1f", disabled=True,
+                             help="Total EU daily velocity (sum across countries)"),
             "Stockout est.": st.column_config.TextColumn("Stockout est.", disabled=True),
             "Order by":      st.column_config.TextColumn("Order by",      disabled=True),
             "Days to order": st.column_config.NumberColumn("Days to order", disabled=True),
@@ -2462,12 +2471,11 @@ def render_reorder_planner(rows: list[dict]):
         ship_rows.append({
             "ASIN":           src["_asin"],
             "Product":        row["Product"],
-            "Marketplace":    src["_mp_raw"],
             "Source":         row["Source"],
             "Stockout est.":  row["Stockout est."],
             "Order by":       row["Order by"],
             "Units to order": int(row["Reorder units"]),
-            "Ship date":      str(today),
+            "Order date":     str(today),
             "Est. arrival":   str(today + _td(days=lead_d)),
         })
 
