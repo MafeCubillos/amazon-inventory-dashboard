@@ -2311,7 +2311,8 @@ def render_reorder_planner(rows: list[dict]):
         # EU totals from r and its countries
         total_stock   = int(r.get("total_avail",   0))
         total_inbound = int(r.get("total_inbound", 0))
-        total_vel     = float(r.get("avg_vel",     0))        # already sum across countries
+        total_vel     = float(r.get("avg_vel",      0))       # sum of 30d velocities
+        total_vel_fc  = float(r.get("avg_vel_fcst", 0))       # sum of forecast-based velocities (3M)
 
         if fcast is not None:
             # Skip ASIN with zero demand anywhere
@@ -2400,7 +2401,8 @@ def render_reorder_planner(rows: list[dict]):
                 "Inbound":       total_inbound,
                 "On order 📦":   on_order,
                 "🏠 Local":      local_used,
-                "Vel/day":       round(total_vel, 1),
+                "Vel/day (30d)": round(total_vel, 1),
+                "Vel/day (3M)":  round(total_vel_fc, 1),
                 "Stockout est.": stockout_lbl,
                 "Order by":      order_by_lbl,
                 "Days to order": int(days_to_order) if days_to_order < 9999 else 999,
@@ -2434,7 +2436,8 @@ def render_reorder_planner(rows: list[dict]):
     )
 
     # ── Editable table ─────────────────────────────────────────
-    display_cols = ["Product","Source","Stock (EU)","Inbound","On order 📦","🏠 Local","Vel/day",
+    display_cols = ["Product","Source","Stock (EU)","Inbound","On order 📦","🏠 Local",
+                    "Vel/day (30d)","Vel/day (3M)",
                     "Stockout est.","Order by","Days to order","Alert","Reorder units"]
     df_show = pd.DataFrame(needs)[display_cols]
 
@@ -2450,8 +2453,11 @@ def render_reorder_planner(rows: list[dict]):
                              help="Units ordered from supplier (ordered+shipped POs)"),
             "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True,
                              help="Units at your warehouse already counted against this reorder"),
-            "Vel/day":       st.column_config.NumberColumn("Vel/day",      format="%.1f", disabled=True,
-                             help="Total EU daily velocity (sum across countries)"),
+            "Vel/day (30d)": st.column_config.NumberColumn("Vel/day (30d)", format="%.1f", disabled=True,
+                             help="Last 30 days of actual sales ÷ 30 (EU total, sum across countries)"),
+            "Vel/day (3M)":  st.column_config.NumberColumn("Vel/day (3M)",  format="%.1f", disabled=True,
+                             help=("Forecast for next 3 months ÷ 90 (EU total). "
+                                   "When Source = 📈 Forecast, the planner's reorder math is based on this.")),
             "Stockout est.": st.column_config.TextColumn("Stockout est.", disabled=True),
             "Order by":      st.column_config.TextColumn("Order by",      disabled=True),
             "Days to order": st.column_config.NumberColumn("Days to order", disabled=True),
