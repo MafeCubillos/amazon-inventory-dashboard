@@ -1211,14 +1211,23 @@ def compute_label_runway(asin: str, current_units: int, snapshot_date: date,
         for p in asin_pos
         if p.get("status") == "received" and _po_event_date(p) >= snapshot_date
     )
-    # Label orders received after snapshot → add (same >= convention)
-    additions = sum(
-        int(lo.get("units") or 0)
-        for lo in asin_label_orders
-        if lo.get("status") == "received"
-        and _safe_date(lo.get("received_date"))
-        and _safe_date(lo.get("received_date")) >= snapshot_date
-    )
+    # Label orders received after snapshot → add (same >= convention).
+    # If received_date is blank (user just flipped status to "received" without
+    # filling in the date), fall back to est_arrival, then to today. This way
+    # the addition still applies as long as SOME plausible event date is >=
+    # snapshot_date. Without the fallback, receipts were being silently
+    # dropped when the user didn't fill in received_date.
+    additions = 0
+    for lo in asin_label_orders:
+        if lo.get("status") != "received":
+            continue
+        event_date = (
+            _safe_date(lo.get("received_date"))
+            or _safe_date(lo.get("est_arrival"))
+            or date.today()
+        )
+        if event_date >= snapshot_date:
+            additions += int(lo.get("units") or 0)
     # Pending label orders → shown as "Incoming" (not yet adjusted)
     incoming = sum(
         int(lo.get("units") or 0)
