@@ -486,7 +486,15 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
             inbound = int(inv.get("units_inbound") or 0)
             vel     = vel_idx.get(key, 0.0)
             vel_fcst = fcst_vel_idx.get(key, 0.0)
-            days    = float(alert.get("days_of_stock_left") or (avail / vel if vel > 0 else 9999.0))
+            # When there were no sales in the last 30 days (vel == 0) the raw
+            # days_left goes to 9999 (→ shown as ∞), which is misleading when
+            # the forecast clearly predicts demand. Fall back to the forecast
+            # velocity so the country row reflects the expected sell-through.
+            _vel_for_days = vel if vel > 0 else vel_fcst
+            days    = float(
+                alert.get("days_of_stock_left")
+                or (avail / _vel_for_days if _vel_for_days > 0 else 9999.0)
+            )
             days_fcst = round(avail / vel_fcst, 1) if vel_fcst > 0 else 9999.0
             status  = alert.get("alert_status") or (
                 "critical" if days < lead else ("warning" if days < lead + warn_buffer else "ok")
