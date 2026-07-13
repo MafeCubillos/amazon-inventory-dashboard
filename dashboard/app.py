@@ -3561,15 +3561,21 @@ with c_sync:
         if DEMO_MODE:
             st.toast("Demo mode — connect SP-API to sync", icon="🧪")
         else:
-            with st.spinner("Syncing…"):
+            with st.spinner("Syncing (this may take 30-60s while Amazon builds reports)…"):
                 try:
                     from backend.fetchers.catalog import fetch_catalog
                     from backend.fetchers.inventory import fetch_all_inventory
                     from backend.fetchers.sales import fetch_all_sales
                     from backend.reorder import calculate_reorder_alerts
-                    fetch_catalog(); fetch_all_inventory()
-                    fetch_all_sales(); calculate_reorder_alerts()
-                    clear_caches(); st.rerun()
+                    fetch_catalog()
+                    inv_results = fetch_all_inventory()
+                    fetch_all_sales()
+                    calculate_reorder_alerts()
+                    clear_caches()
+                    total_rows = sum(inv_results.values()) if isinstance(inv_results, dict) else 0
+                    st.toast(f"✅ Sync complete — {total_rows} inventory rows across all marketplaces",
+                             icon="✅")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Sync failed: {e}")
 
