@@ -173,14 +173,37 @@ def fetch_sales_for_marketplace(marketplace_code: str) -> int:
 
 
 def fetch_all_sales() -> dict[str, int]:
+    """Fetch sales for each marketplace with quota-aware retry.
+
+    SP-API's Reports API has a burst quota (~1 report/marketplace per few
+    minutes). Amazon returns 429 QuotaExceeded when it's tripped — most
+    common on the 4th marketplace (IT after ES/FR/DE). We retry once with a
+    60 second wait if we see QuotaExceeded, which is usually enough for the
+    per-endpoint quota to refill.
+    """
     results: dict[str, int] = {}
-    for code in MARKETPLACES:
+    for idx, code in enumerate(MARKETPLACES):
+        # Small pause between markets to avoid burst-quota lockout.
+        if idx > 0:
+            time.sleep(3)
         try:
             n = fetch_sales_for_marketplace(code)
             log_sync("sales", code, "success", n)
             results[code] = n
         except Exception as exc:
-            logger.error("sales  %s  FAILED: %s", code, exc)
-            log_sync("sales", code, "error", 0, str(exc))
+            msg = str(exc)
+            if "QuotaExceeded" in msg or "429" in msg:
+                logger.warning("sales  %s  quota hit — retrying in 60s", code)
+                time.sleep(60)
+                try:
+                    n = fetch_sales_for_marketplace(code)
+                    log_sync("sales", code, "success", n)
+                    results[code] = n
+                    continue
+                except Exception as exc2:
+                    exc = exc2
+                    msg = str(exc2)
+            logger.error("sales  %s  FAILED: %s", code, msg)
+            log_sync("sales", code, "error", 0, msg)
             results[code] = 0
     return results
