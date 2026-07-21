@@ -3145,8 +3145,14 @@ def render_forecast_page(rows: list[dict]):
     inv_idx  = {r["asin"]: r for r in rows if r["asin"] == dist_asin}
     prod_row = inv_idx.get(dist_asin)
 
+    # Include TikTok as a 5th "country" if the forecast sheet has a TT column.
+    # TikTok stock comes from tiktok_stock table (no FBA); inbound = 0.
     COUNTRIES = ["ES", "FR", "DE", "IT"]
-    FLAGS_MAP = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹"}
+    if "TT" in fcast_df.columns:
+        COUNTRIES = COUNTRIES + ["TT"]
+    FLAGS_MAP = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹", "TT": "🎵"}
+
+    tt_stock_map = _load_tiktok_stock() if "TT" in COUNTRIES else {}
 
     country_data = {}
     for mp in COUNTRIES:
@@ -3154,15 +3160,22 @@ def render_forecast_page(rows: list[dict]):
             int(fcast_df.loc[m, mp]) if m in fcast_df.index else 0
             for m in months
         )
-        c_inv = {}
-        if prod_row:
-            for c in prod_row.get("countries", []):
-                if c["mp"] == mp:
-                    c_inv = c
-                    break
-        stock   = c_inv.get("avail",   0)
-        inbound = c_inv.get("inbound", 0)
-        vel     = c_inv.get("vel",     0.0)
+        if mp == "TT":
+            # TikTok: stock from tiktok_stock; no inbound; velocity derived from forecast
+            tt_row  = tt_stock_map.get(dist_asin, {}) or {}
+            stock   = int(tt_row.get("units") or 0)
+            inbound = 0
+            vel     = round(fc_total / (30 * len(months)), 2) if len(months) else 0.0
+        else:
+            c_inv = {}
+            if prod_row:
+                for c in prod_row.get("countries", []):
+                    if c["mp"] == mp:
+                        c_inv = c
+                        break
+            stock   = c_inv.get("avail",   0)
+            inbound = c_inv.get("inbound", 0)
+            vel     = c_inv.get("vel",     0.0)
         need    = max(0, fc_total - stock - inbound)
         country_data[mp] = {
             "flag":    FLAGS_MAP[mp],
@@ -3179,7 +3192,7 @@ def render_forecast_page(rows: list[dict]):
         total_need = sum(v["need"] for v in country_data.values())
 
         if total_need == 0:
-            raw_units = {mp: available / 4 for mp in COUNTRIES}
+            raw_units = {mp: available / len(COUNTRIES) for mp in COUNTRIES}
         else:
             weights = {}
             for mp, d in country_data.items():
