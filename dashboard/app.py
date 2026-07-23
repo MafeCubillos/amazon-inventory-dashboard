@@ -2756,6 +2756,77 @@ def render_reorder_planner(rows: list[dict]):
 # EDIT PANEL
 # ══════════════════════════════════════════════════════════════
 
+def render_add_product_panel(rows: list[dict]):
+    """Add-a-new-ASIN form. Inserts into `products` and triggers a sync so
+    inventory + sales flow in immediately from Amazon SP-API."""
+    with st.expander("➕ Add new product (new ASIN launch)", expanded=False):
+        st.caption(
+            "Use this when you launch a new product. Once added, the next sync "
+            "will pull FBA inventory + sales for this ASIN automatically. "
+            "You'll still need to add a matching tab to your Google Sheets "
+            "forecast to see it in the Forecast/Reorder views."
+        )
+        existing_asins = {r["asin"] for r in rows}
+
+        a1, a2 = st.columns(2)
+        with a1:
+            new_asin  = st.text_input("ASIN *", key="new_prod_asin",
+                                      placeholder="B0XXXXXXXX",
+                                      help="10-character Amazon ASIN")
+            new_sku   = st.text_input("SKU *", key="new_prod_sku",
+                                      placeholder="e.g. 682683495XXX",
+                                      help="Seller SKU — needed so the catalog sync can pull the product name")
+            new_name  = st.text_input("Product name (optional)", key="new_prod_name",
+                                      placeholder="Will be filled from Amazon on next sync if left blank")
+        with a2:
+            new_cogs   = st.number_input("COGS (€)", min_value=0.0, step=0.01,
+                                          format="%.2f", key="new_prod_cogs",
+                                          help="Cost per unit — used for stock value € and reorder math")
+            new_lead   = st.number_input("Lead time (days)", min_value=1, max_value=365,
+                                          value=70, step=1, key="new_prod_lead",
+                                          help="Days from placing supplier PO to bottles arriving at FBA")
+            new_target = st.number_input("Target coverage (days)", min_value=1, max_value=365,
+                                          value=60, step=1, key="new_prod_target",
+                                          help="Buffer days of stock beyond lead time (reorder planning)")
+
+        if st.button("➕ Add product & trigger sync", type="primary", key="add_prod_btn"):
+            if DEMO_MODE:
+                st.info("Demo mode — nothing is persisted.", icon="🧪")
+            elif not new_asin.strip() or not new_sku.strip():
+                st.error("ASIN and SKU are required.")
+            elif new_asin.strip() in existing_asins:
+                st.error(f"ASIN {new_asin.strip()} already exists. Use the edit panel instead.")
+            else:
+                try:
+                    from supabase import create_client as _cc
+                    adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+                    adm.table("products").insert({
+                        "asin":                 new_asin.strip(),
+                        "sku":                  new_sku.strip(),
+                        "product_name":         new_name.strip() or new_asin.strip(),
+                        "cogs_eur":             float(new_cogs),
+                        "lead_time_days":       int(new_lead),
+                        "target_days_coverage": int(new_target),
+                    }).execute()
+                    st.success(f"✅ Added {new_asin.strip()} — running sync…")
+
+                    # Immediately trigger a sync so inventory + sales appear right away.
+                    from backend.fetchers.catalog   import fetch_catalog
+                    from backend.fetchers.inventory import fetch_all_inventory
+                    from backend.fetchers.sales     import fetch_all_sales
+                    from backend.reorder            import calculate_reorder_alerts
+                    with st.spinner("Syncing (30-60s while Amazon builds reports)…"):
+                        fetch_catalog()
+                        fetch_all_inventory()
+                        fetch_all_sales()
+                        calculate_reorder_alerts()
+                        clear_caches()
+                    st.success("Sync complete — new product should now appear in the table above.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to add product: {exc}")
+
+
 def render_edit_panel(rows: list[dict]):
     with st.expander("✏️ Edit Product Names, COGS & Lead Times", expanded=False):
         st.caption("Edit product names (shown everywhere in the dashboard), COGS, lead time and target coverage.")
@@ -3655,6 +3726,7 @@ if page == "inventory":
     natural_h = 96 + len(display_rows) * 52 + len(display_rows) * 4 * 44 + 40
     max_h     = min(natural_h, 720)
     components.html(table_html, height=max_h, scrolling=False)
+    render_add_product_panel(rows)
     render_edit_panel(rows)
 
 # ════════ PAGE: REORDER ════════
