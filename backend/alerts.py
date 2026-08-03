@@ -64,6 +64,13 @@ def _load_alert_data() -> list[dict]:
             # delisted / renamed SKUs). Their reorder_alerts rows are orphans.
             if asin not in products:
                 continue
+            reorder_qty = int(a.get("suggested_reorder_qty") or 0)
+            # Skip alerts with no actionable reorder quantity — status can flip
+            # to "critical" when days_of_stock_left < lead_time even though
+            # buffer coverage is already met, producing noisy "critical, order 0"
+            # rows that only confuse the reader.
+            if reorder_qty <= 0:
+                continue
             p = products[asin]
             rows.append({
                 "asin":        asin,
@@ -72,7 +79,7 @@ def _load_alert_data() -> list[dict]:
                 "flag":        FLAGS.get(a["marketplace"], ""),
                 "status":      a["alert_status"],
                 "days_left":   round(float(a.get("days_of_stock_left") or 0), 0),
-                "reorder_qty": int(a.get("suggested_reorder_qty") or 0),
+                "reorder_qty": reorder_qty,
                 "lead":        int(p.get("lead_time_days") or 30),
             })
 
@@ -97,10 +104,10 @@ def _build_html(rows: list[dict]) -> str:
             return '<span style="background:#FCEBEB;color:#A32D2D;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700">🔴 Critical</span>'
         return '<span style="background:#FAEEDA;color:#854F0B;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700">🟡 Warning</span>'
 
-    def _days_color(d):
-        if d < 30:  return "#E24B4A"
-        if d < 60:  return "#BA7517"
-        return "#3B6D11"
+    # Color the days number by STATUS, not by absolute thresholds, so a
+    # "Critical" row never shows a green day count (which read as a bug).
+    def _days_color(status):
+        return {"critical": "#E24B4A", "warning": "#BA7517"}.get(status, "#3B6D11")
 
     rows_html = ""
     for r in rows:
@@ -110,7 +117,7 @@ def _build_html(rows: list[dict]) -> str:
   <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#111">{r['name'][:55]}</td>
   <td style="padding:10px 14px;font-size:13px;text-align:center">{r['flag']} {r['mp']}</td>
   <td style="padding:10px 14px;font-size:13px;text-align:center">{_status_badge(r['status'])}</td>
-  <td style="padding:10px 14px;font-size:14px;font-weight:700;color:{_days_color(r['days_left'])};text-align:center">{int(r['days_left'])}d</td>
+  <td style="padding:10px 14px;font-size:14px;font-weight:700;color:{_days_color(r['status'])};text-align:center">{int(r['days_left'])}d</td>
   <td style="padding:10px 14px;font-size:13px;text-align:center;color:#555">{r['reorder_qty']:,}</td>
 </tr>"""
 
