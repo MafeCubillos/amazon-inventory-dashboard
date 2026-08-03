@@ -8,6 +8,12 @@ on:
     - cron: '17 8 * * 1'   # Monday
     - cron: '17 8 * * 4'   # Thursday
   workflow_dispatch:        # Allow manual trigger from GitHub Actions tab
+    inputs:
+      note:
+        description: 'Optional banner at the top of the email (e.g. correction notice)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   send-alert:
@@ -31,6 +37,7 @@ jobs:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          ALERT_EMAIL_NOTE: ${{ github.event.inputs.note }}
         run: |
           python -c "
           import sys, logging

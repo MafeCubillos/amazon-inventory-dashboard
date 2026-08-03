@@ -30,8 +30,22 @@ FLAGS = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹"}
 # ── Data helpers ───────────────────────────────────────────────────────────
 
 def _load_alert_data() -> list[dict]:
-    """Return products with critical or warning status from Supabase."""
+    """Return products with critical or warning status from Supabase.
+
+    Recomputes alerts fresh against the latest inventory + velocity so the
+    email doesn't leak stale reorder_alerts rows (e.g. a critical status
+    from a sync when stock was low, still surfaced after the user restocked).
+    Also skips ASINs whose products row is missing (cleaned-up SKUs) to
+    avoid emailing about products that no longer exist.
+    """
     try:
+        # Always recompute before reading — cheap Supabase-only operation
+        try:
+            from backend.reorder import calculate_reorder_alerts
+            calculate_reorder_alerts()
+        except Exception as exc:
+            logger.warning("alerts  could not recompute reorder alerts: %s", exc)
+
         products = {
             r["asin"]: r
             for r in (db_admin.table("products").select(
@@ -45,10 +59,15 @@ def _load_alert_data() -> list[dict]:
 
         rows = []
         for a in alerts:
-            p = products.get(a["asin"], {})
+            asin = a["asin"]
+            # Skip alerts for ASINs no longer in the products catalog (e.g.
+            # delisted / renamed SKUs). Their reorder_alerts rows are orphans.
+            if asin not in products:
+                continue
+            p = products[asin]
             rows.append({
-                "asin":        a["asin"],
-                "name":        p.get("product_name") or a["asin"],
+                "asin":        asin,
+                "name":        p.get("product_name") or asin,
                 "mp":          a["marketplace"],
                 "flag":        FLAGS.get(a["marketplace"], ""),
                 "status":      a["alert_status"],
@@ -95,6 +114,21 @@ def _build_html(rows: list[dict]) -> str:
   <td style="padding:10px 14px;font-size:13px;text-align:center;color:#555">{r['reorder_qty']:,}</td>
 </tr>"""
 
+    # Optional correction / notice banner passed via ALERT_EMAIL_NOTE env var.
+    # Rendered at the top of the email between the header and the summary
+    # cards. Useful for one-off correction sends ("the previous email had
+    # wrong data") without touching the schedule.
+    note = os.getenv("ALERT_EMAIL_NOTE", "").strip()
+    note_html = (
+        f"""
+  <div style="background:#FFF4E5;border-bottom:1px solid #F0D9B0;padding:14px 24px;
+              color:#7A4F00;font-size:13px;font-weight:600">
+    {note}
+  </div>"""
+        if note
+        else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#F4F4F2;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif">
@@ -109,7 +143,7 @@ def _build_html(rows: list[dict]) -> str:
       <div style="color:#888;font-size:12px;margin-top:4px">{today}</div>
     </div>
   </div>
-
+{note_html}
   <!-- Summary -->
   <div style="display:flex;gap:0;border-bottom:1px solid #EEE">
     <div style="flex:1;padding:20px 24px;text-align:center;border-right:1px solid #EEE">
