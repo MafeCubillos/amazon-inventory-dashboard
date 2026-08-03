@@ -23,7 +23,16 @@ _MARKETPLACES = ("ES", "FR", "DE", "IT")
 
 
 def _fetch_latest_inventory() -> list[dict]:
-    """Return one row per (asin, marketplace) — the most recent snapshot."""
+    """Return one row per (asin, marketplace) — the most recent snapshot.
+
+    The Supabase REST default caps rows at 1000 per request. When we ran
+    the fallback without a server-side ORDER BY, the first 1000 rows could
+    be any 1000 — often missing today's latest snapshot for some
+    (asin, marketplace) combos, so the reorder module saw stale (or 0)
+    units and stored days=0 alerts. We now order server-side by
+    snapshot_date DESC so the freshest snapshots come first, and dedupe
+    those.
+    """
     try:
         resp = db_admin.rpc("latest_inventory", {}).execute()
         if resp.data:
@@ -31,10 +40,18 @@ def _fetch_latest_inventory() -> list[dict]:
     except Exception:
         pass
 
-    # Fallback: Python-side deduplication if the RPC view doesn't exist yet
-    rows = db_admin.table("inventory_snapshots").select("*").execute().data or []
+    # Fallback: order server-side by snapshot_date desc so the most recent
+    # row per (asin, marketplace) is guaranteed to be in the returned page.
+    rows = (
+        db_admin.table("inventory_snapshots")
+        .select("*")
+        .order("snapshot_date", desc=True)
+        .execute()
+        .data
+        or []
+    )
     seen: dict[tuple, dict] = {}
-    for r in sorted(rows, key=lambda x: x["snapshot_date"], reverse=True):
+    for r in rows:   # already sorted desc — first hit per key is the latest
         key = (r["asin"], r["marketplace"])
         if key not in seen:
             seen[key] = r
@@ -42,6 +59,8 @@ def _fetch_latest_inventory() -> list[dict]:
 
 
 def _fetch_latest_velocity() -> list[dict]:
+    """Same story as inventory: order server-side so the freshest velocity
+    per (asin, marketplace) survives the 1000-row REST limit."""
     try:
         resp = db_admin.rpc("latest_velocity", {}).execute()
         if resp.data:
@@ -49,9 +68,16 @@ def _fetch_latest_velocity() -> list[dict]:
     except Exception:
         pass
 
-    rows = db_admin.table("sales_velocity").select("*").execute().data or []
+    rows = (
+        db_admin.table("sales_velocity")
+        .select("*")
+        .order("period_end_date", desc=True)
+        .execute()
+        .data
+        or []
+    )
     seen: dict[tuple, dict] = {}
-    for r in sorted(rows, key=lambda x: x["period_end_date"], reverse=True):
+    for r in rows:
         key = (r["asin"], r["marketplace"])
         if key not in seen:
             seen[key] = r
