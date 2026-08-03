@@ -486,15 +486,15 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
             inbound = int(inv.get("units_inbound") or 0)
             vel     = vel_idx.get(key, 0.0)
             vel_fcst = fcst_vel_idx.get(key, 0.0)
-            # When there were no sales in the last 30 days (vel == 0) the raw
-            # days_left goes to 9999 (→ shown as ∞), which is misleading when
-            # the forecast clearly predicts demand. Fall back to the forecast
-            # velocity so the country row reflects the expected sell-through.
+            # Compute days_left fresh from current avail + velocity every time.
+            # Do NOT trust reorder_alerts.days_of_stock_left — it can be stale
+            # (calculated at last sync against different inventory/velocity
+            # numbers), which produced misleading values like "0d" even when
+            # 346 units and vel 7/day = 49 days.
+            # Fall back to forecast velocity when 30d vel is zero, so an ASIN
+            # with no recent sales but a real forecast still shows finite days.
             _vel_for_days = vel if vel > 0 else vel_fcst
-            days    = float(
-                alert.get("days_of_stock_left")
-                or (avail / _vel_for_days if _vel_for_days > 0 else 9999.0)
-            )
+            days      = round(avail / _vel_for_days, 1) if _vel_for_days > 0 else 9999.0
             days_fcst = round(avail / vel_fcst, 1) if vel_fcst > 0 else 9999.0
             status  = alert.get("alert_status") or (
                 "critical" if days < lead else ("warning" if days < lead + warn_buffer else "ok")
@@ -579,7 +579,19 @@ def trend_html(t: str) -> str:
             "flat": '<span style="color:#999;font-size:15px">→</span>'}.get(t, "")
 
 
-def days_style(d) -> str:
+_STATUS_COLOR = {"critical": "#E24B4A", "warning": "#BA7517", "ok": "#639922"}
+
+
+def days_style(d, status: str | None = None) -> str:
+    """Text color for a days-left value.
+
+    If a `status` is given (critical / warning / ok), use the matching status
+    color so the number matches the alert dot. Otherwise fall back to the
+    absolute thresholds from Settings (days_red / days_amber). This keeps
+    per-country rows visually consistent with their alert dot.
+    """
+    if status in _STATUS_COLOR:
+        return f"color:{_STATUS_COLOR[status]};font-weight:700"
     try:
         v = float(d)
     except (TypeError, ValueError):
@@ -711,8 +723,11 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
         for c in r["countries"]:
             if active_mps and c["mp"] not in active_mps:
                 continue
-            dsc      = days_style(c["days_left"])
-            dsc_fcst = days_style(c.get("days_left_fcst", 9999))
+            # Match the days-left number color with the alert dot color so a
+            # 🔴 dot always has a 🔴 days number next to it (avoids the
+            # confusing "amber 49d + red dot" mismatch).
+            dsc      = days_style(c["days_left"],       status=c["status"])
+            dsc_fcst = days_style(c.get("days_left_fcst", 9999), status=c["status"])
             sub_cells = (
                 td(f'<span style="font-size:12px;font-weight:600;color:#444">'
                    f'{c["flag"]} {c["mp"]}</span>', style="padding-left:26px")
