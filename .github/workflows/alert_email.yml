@@ -14,6 +14,11 @@ on:
         required: false
         type: string
         default: ''
+      to:
+        description: 'Override recipient(s) for this run (comma-separated). Blank = use default from secrets.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   send-alert:
@@ -35,7 +40,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
-          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_TO: ${{ github.event.inputs.to != '' && github.event.inputs.to || secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           ALERT_EMAIL_NOTE: ${{ github.event.inputs.note }}
         run: |
