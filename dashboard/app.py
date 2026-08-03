@@ -496,9 +496,16 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
             _vel_for_days = vel if vel > 0 else vel_fcst
             days      = round(avail / _vel_for_days, 1) if _vel_for_days > 0 else 9999.0
             days_fcst = round(avail / vel_fcst, 1) if vel_fcst > 0 else 9999.0
-            status  = alert.get("alert_status") or (
-                "critical" if days < lead else ("warning" if days < lead + warn_buffer else "ok")
-            )
+            # Always compute status FRESH from current days + lead + buffer.
+            # We used to prefer alert.get("alert_status") which can be stale
+            # (e.g. it said "critical" from a previous sync where inventory
+            # was much lower, so the dot stayed red even after restock).
+            if days < lead:
+                status = "critical"
+            elif days < lead + warn_buffer:
+                status = "warning"
+            else:
+                status = "ok"
             value   = round(avail * cogs, 2) if cogs else float(inv.get("stock_value_eur") or 0)
             reorder = int(alert.get("suggested_reorder_qty") or 0)
 
