@@ -8,7 +8,7 @@ Monvita Wellness Group S.L. ("we", "us", "our") is a Spanish company that
 markets and sells nutritional supplements under the Nyvos brand. Our
 registered address is in Spain.
 
-Contact: mafe.cubillos@monvita.co
+Contact: salesops@monvita.co
 
 ## 2. Scope of this policy
 
@@ -59,7 +59,7 @@ months are periodically archived or deleted.
 If you believe your personal data may be affected by our operations
 (e.g. you are a supplier or team member), you may request access,
 rectification, deletion, restriction of processing, or portability at
-any time. Contact **mafe.cubillos@monvita.co** — we respond within 72
+any time. Contact **salesops@monvita.co** — we respond within 72
 hours.
 
 ## 8. Security
@@ -79,4 +79,4 @@ communicated through our internal dashboard.
 ## 10. Contact
 
 Questions or requests concerning this policy:
-**mafe.cubillos@monvita.co**
+**salesops@monvita.co**
