@@ -3644,7 +3644,7 @@ Full response for this shop:
                 if st.button("🔬 Show raw TikTok API response (debug)", key="tk_debug"):
                     try:
                         import hashlib, hmac, time, httpx
-                        path = "/fulfillment/202309/fbt/inventory/search"
+                        path = "/product/202309/products/search"
                         ts   = str(int(time.time()))
                         params = {
                             "app_key": tk_key, "timestamp": ts,
@@ -3656,7 +3656,8 @@ Full response for this shop:
                         params["sign"] = hmac.new(tk_secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
                         r = httpx.post(
                             "https://open-api.tiktokglobalshop.com" + path,
-                            params=params, json={"page_size": 100},
+                            params=params,
+                            json={"status": "ACTIVATE", "page_size": 100},
                             headers={"x-tts-access-token": tk_token,
                                      "content-type": "application/json"},
                             timeout=15,
