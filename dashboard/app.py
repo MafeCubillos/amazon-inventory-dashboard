@@ -3597,6 +3597,33 @@ Access token expires in: {data.get('access_token_expire_in')} seconds""",
                 " — you'll be sent to TikTok, log in with your Nyvos seller account, approve, "
                 "then get redirected back with an authorization code."
             )
+        elif tk_key and tk_token and not tk_cipher:
+            # Access token exists but shop_cipher wasn't in the OAuth response
+            # (newer API versions require a separate call). Offer to fetch it.
+            st.warning("Access token is set but Shop Cipher is missing — TikTok's newer "
+                       "OAuth doesn't always return it. Click below to fetch it via the "
+                       "authorization API.")
+            if st.button("🔍 Fetch Shop Cipher from TikTok", key="tk_fetch_cipher"):
+                try:
+                    from backend.tiktok_oauth import fetch_authorized_shops
+                    shops = fetch_authorized_shops(tk_key, tk_secret, tk_token)
+                    if not shops:
+                        st.error("No authorized shops returned. Your Nyvos account may not be "
+                                 "properly linked to the app.")
+                    else:
+                        st.success(f"Found {len(shops)} authorized shop(s):")
+                        for s in shops:
+                            st.code(f"""Shop: {s.get('name') or s.get('shop_name') or '(no name)'}
+Region: {s.get('region') or s.get('shop_region') or '(unknown)'}
+
+Copy this into Streamlit Secrets:
+
+TIKTOK_SHOP_CIPHER = "{s.get('cipher') or s.get('shop_cipher') or ''}"
+
+Full response for this shop:
+{s}""", language="toml")
+                except Exception as exc:
+                    st.error(f"Failed: {exc}")
         elif tk_key and tk_token and tk_cipher:
             st.success("✅ TikTok connected. Inventory will refresh on the next 🔄 Sync.")
             if st.button("🧪 Test TikTok inventory pull now", key="tk_test"):
