@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json as _json
 import logging
 import os
 import time
@@ -54,22 +55,33 @@ _ENDPOINT = "/product/202309/products/search"
 
 # ── Signing helpers ──────────────────────────────────────────────
 
-def _sign(app_secret: str, path: str, params: dict[str, str]) -> str:
-    """HMAC-SHA256 signature TikTok expects on every request."""
+def _sign(app_secret: str, path: str, params: dict[str, str],
+          body: dict | None = None) -> str:
+    """HMAC-SHA256 signature TikTok expects on every request.
+
+    For POST requests with an application/json body, the serialized body
+    is included in the payload between the sorted params and the trailing
+    app_secret. Without this, TikTok returns 106001 "Invalid credentials.
+    The 'sign' query parameter is invalid."
+    """
     filtered = {k: v for k, v in params.items() if k not in ("sign", "access_token")}
     concat   = "".join(f"{k}{v}" for k, v in sorted(filtered.items()))
-    payload  = f"{app_secret}{path}{concat}{app_secret}"
+    body_str = ""
+    if body is not None:
+        body_str = _json.dumps(body, separators=(",", ":"))
+    payload  = f"{app_secret}{path}{concat}{body_str}{app_secret}"
     return hmac.new(app_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def _base_params(app_key: str, app_secret: str, shop_cipher: str, path: str) -> dict:
+def _base_params(app_key: str, app_secret: str, shop_cipher: str, path: str,
+                 body: dict | None = None) -> dict:
     p = {
         "app_key":     app_key,
         "timestamp":   str(int(time.time())),
         "shop_cipher": shop_cipher,
         "version":     "202309",
     }
-    p["sign"] = _sign(app_secret, path, p)
+    p["sign"] = _sign(app_secret, path, p, body=body)
     return p
 
 
@@ -143,16 +155,20 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
     max_pages  = 30   # 30 × 100 products = 3000, way more than any shop needs
 
     for page_i in range(max_pages):
-        params = _base_params(app_key, app_secret, shop_cipher, _ENDPOINT)
         body   = {"status": "ACTIVATE", "page_size": 100}
         if page_token:
             body["page_token"] = page_token
+        params = _base_params(app_key, app_secret, shop_cipher, _ENDPOINT, body=body)
 
         try:
+            # Use httpx content= with pre-serialized JSON so what we sign matches
+            # what we send byte-for-byte. httpx's json= re-serializes, which can
+            # subtly differ (spacing, key order) and break the signature.
+            body_bytes = _json.dumps(body, separators=(",", ":")).encode()
             r = httpx.post(
                 _BASE_URL + _ENDPOINT,
                 params=params,
-                json=body,
+                content=body_bytes,
                 headers={
                     "x-tts-access-token": access_token,
                     "content-type":       "application/json",
