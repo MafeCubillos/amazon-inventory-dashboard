@@ -3539,6 +3539,85 @@ def render_settings():
             st.rerun()
 
     st.divider()
+
+    # ── 🎵 TikTok Shop integration ──────────────────────────────
+    with st.container(border=True):
+        st.markdown("**🎵 TikTok Shop integration**")
+        st.caption(
+            "One-time authorization to pull live FBT inventory from your "
+            "TikTok Seller account. Requires App Key + App Secret from "
+            "TikTok Shop Partner Center (already set in Streamlit Secrets)."
+        )
+
+        tk_key    = os.getenv("TIKTOK_APP_KEY", "").strip()
+        tk_secret = os.getenv("TIKTOK_APP_SECRET", "").strip()
+        tk_token  = os.getenv("TIKTOK_ACCESS_TOKEN", "").strip()
+        tk_cipher = os.getenv("TIKTOK_SHOP_CIPHER", "").strip()
+
+        # Handle OAuth callback (redirect back with ?code=XXX)
+        try:
+            qp = st.query_params
+            code_in_url = qp.get("code", "")
+        except Exception:
+            code_in_url = ""
+
+        if code_in_url and tk_key and tk_secret:
+            st.info(f"Detected authorization code in URL: `{code_in_url[:20]}…`")
+            if st.button("🔑 Exchange code for token", key="tk_exchange"):
+                try:
+                    from backend.tiktok_oauth import exchange_code_for_token
+                    data = exchange_code_for_token(tk_key, tk_secret, code_in_url)
+                    st.success("Token exchange successful!")
+                    st.code(f"""Copy these values into Streamlit Secrets:
+
+TIKTOK_ACCESS_TOKEN = "{data.get('access_token', '')}"
+TIKTOK_REFRESH_TOKEN = "{data.get('refresh_token', '')}"
+TIKTOK_SHOP_CIPHER = "{data.get('shop_cipher') or data.get('shop_id') or ''}"
+
+Access token expires in: {data.get('access_token_expire_in')} seconds""",
+                             language="toml")
+                    st.warning("After adding these to Streamlit Secrets, reboot the app.")
+                except Exception as exc:
+                    st.error(f"Exchange failed: {exc}")
+
+        # Status pills
+        status_cols = st.columns(3)
+        with status_cols[0]:
+            st.metric("App Key", "✅ Set" if tk_key else "❌ Missing")
+        with status_cols[1]:
+            st.metric("Access Token", "✅ Set" if tk_token else "❌ Missing")
+        with status_cols[2]:
+            st.metric("Shop Cipher", "✅ Set" if tk_cipher else "❌ Missing")
+
+        if tk_key and not tk_token:
+            from backend.tiktok_oauth import build_authorize_url
+            auth_url = build_authorize_url(tk_key)
+            st.markdown(
+                f"**Not yet connected.** [🔗 Click here to authorize TikTok Shop]({auth_url})"
+                " — you'll be sent to TikTok, log in with your Nyvos seller account, approve, "
+                "then get redirected back with an authorization code."
+            )
+        elif tk_key and tk_token and tk_cipher:
+            st.success("✅ TikTok connected. Inventory will refresh on the next 🔄 Sync.")
+            if st.button("🧪 Test TikTok inventory pull now", key="tk_test"):
+                try:
+                    from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
+                    n, warnings = fetch_fbt_inventory()
+                    if n > 0:
+                        st.success(f"✅ Pulled inventory for {n} ASINs")
+                    else:
+                        st.warning("No ASINs updated — see warnings below.")
+                    for w in warnings:
+                        st.info(w)
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
+        elif not tk_key:
+            st.info(
+                "Add `TIKTOK_APP_KEY` and `TIKTOK_APP_SECRET` to Streamlit Cloud "
+                "Secrets first (get them from TikTok Partner Center → your app)."
+            )
+
+    st.divider()
     if st.button("↩️ Reset all to defaults", key="reset_settings_btn"):
         st.session_state.warn_buffer      = 15
         st.session_state.days_red         = 30
