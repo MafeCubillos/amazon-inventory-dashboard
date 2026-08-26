@@ -208,33 +208,57 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
     if not all_products:
         return 0, (warnings or ["No products returned from TikTok"])
 
-    # Walk products → skus → aggregate per seller_sku
-    per_sku: dict[str, int] = {}
-    for prod in all_products:
-        for sku in prod.get("skus") or []:
-            key = _extract_sku(sku)
-            if not key:
-                continue
-            per_sku[key] = per_sku.get(key, 0) + _extract_stock(sku)
-
-    if not per_sku:
-        warnings.append("No SKUs with recognized seller_sku field found in "
-                        f"{len(all_products)} products. Use the debug button "
-                        "to inspect raw response.")
-        return 0, warnings
-
-    # Match to ASIN via products.sku
+    # Walk products → skus. Two ways to identify each row:
+    #   1. seller_sku match against products.sku (works when TikTok returns it)
+    #   2. tiktok_product_id → asin manual mapping (fallback when seller_sku
+    #      is empty, which is the common case for many shops)
     sku_rows = db_admin.table("products").select("asin,sku").execute().data or []
     sku_to_asin = {r["sku"]: r["asin"] for r in sku_rows if r.get("sku")}
 
+    # Load the manual mapping table (silently empty if the table doesn't exist yet)
+    try:
+        map_rows = db_admin.table("tiktok_product_map").select(
+            "tiktok_product_id,asin"
+        ).execute().data or []
+        product_id_to_asin = {r["tiktok_product_id"]: r["asin"] for r in map_rows}
+    except Exception:
+        product_id_to_asin = {}
+        warnings.append("tiktok_product_map table not found — run the SQL "
+                        "to enable manual mapping fallback.")
+
+    # Aggregate stock per resolved ASIN (either via seller_sku or product-id map)
+    per_asin: dict[str, int] = {}
+    unmapped_products: list[dict] = []
+    for prod in all_products:
+        prod_id = str(prod.get("id") or "")
+        # Try seller_sku match on any of the SKUs of this product
+        matched_via_sku = False
+        prod_stock = 0
+        for sku in prod.get("skus") or []:
+            key = _extract_sku(sku)
+            qty = _extract_stock(sku)
+            prod_stock += qty
+            if key and key in sku_to_asin:
+                asin = sku_to_asin[key]
+                per_asin[asin] = per_asin.get(asin, 0) + qty
+                matched_via_sku = True
+        if matched_via_sku:
+            continue
+        # Fallback: use the tiktok_product_id → asin mapping
+        if prod_id and prod_id in product_id_to_asin:
+            asin = product_id_to_asin[prod_id]
+            per_asin[asin] = per_asin.get(asin, 0) + prod_stock
+            continue
+        # Neither worked — surface it for the user to map
+        unmapped_products.append({
+            "id":    prod_id,
+            "title": prod.get("title", "")[:80],
+            "stock": prod_stock,
+        })
+
     now_iso = datetime.now(timezone.utc).isoformat()
     updated = 0
-    unknown: list[str] = []
-    for sku, qty in per_sku.items():
-        asin = sku_to_asin.get(sku)
-        if not asin:
-            unknown.append(sku)
-            continue
+    for asin, qty in per_asin.items():
         try:
             db_admin.table("tiktok_stock").upsert(
                 {
@@ -249,10 +273,73 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
         except Exception as exc:
             warnings.append(f"Failed to save {asin}: {exc}")
 
-    if unknown:
-        warnings.append(f"{len(unknown)} SKU(s) from TikTok not in products table: "
-                        f"{', '.join(unknown[:5])}"
-                        + ("…" if len(unknown) > 5 else ""))
+    if unmapped_products:
+        warnings.append(
+            f"{len(unmapped_products)} TikTok product(s) not matched to an ASIN. "
+            "Use the 🔗 Map TikTok Products tab on the TikTok page to assign them."
+        )
 
     logger.info("tiktok  %d ASINs updated (%d warnings)", updated, len(warnings))
     return updated, warnings
+
+
+def fetch_tiktok_products_for_mapping() -> list[dict]:
+    """Return every TikTok product with (id, title, stock) for the mapping UI.
+
+    Uses the same API call as fetch_fbt_inventory but returns raw rows so the
+    dashboard can render a table where the user picks an ASIN for each.
+    """
+    app_key      = os.getenv("TIKTOK_APP_KEY", "").strip()
+    app_secret   = os.getenv("TIKTOK_APP_SECRET", "").strip()
+    access_token = os.getenv("TIKTOK_ACCESS_TOKEN", "").strip()
+    shop_cipher  = os.getenv("TIKTOK_SHOP_CIPHER", "").strip()
+
+    if not all([app_key, app_secret, access_token, shop_cipher]):
+        return []
+
+    all_products: list[dict] = []
+    page_token = ""
+    for _ in range(30):
+        body   = {"status": "ACTIVATE"}
+        extra_qs = {"page_size": "100"}
+        if page_token:
+            extra_qs["page_token"] = page_token
+        p = {
+            "app_key": app_key, "timestamp": str(int(time.time())),
+            "shop_cipher": shop_cipher, "version": "202309",
+            **extra_qs,
+        }
+        p["sign"] = _sign(app_secret, _ENDPOINT, p, body=body)
+        body_bytes = _json.dumps(body, separators=(",", ":")).encode()
+        try:
+            r = httpx.post(
+                _BASE_URL + _ENDPOINT, params=p, content=body_bytes,
+                headers={"x-tts-access-token": access_token,
+                         "content-type": "application/json"},
+                timeout=15,
+            )
+            if r.status_code != 200:
+                break
+            payload = r.json()
+            if payload.get("code") != 0:
+                break
+            data = payload.get("data") or {}
+            all_products.extend(data.get("products") or [])
+            page_token = data.get("next_page_token") or ""
+            if not page_token:
+                break
+        except Exception:
+            break
+
+    # Simplify for the UI: id, title, total stock
+    rows = []
+    for prod in all_products:
+        stock = 0
+        for sku in prod.get("skus") or []:
+            stock += _extract_stock(sku)
+        rows.append({
+            "tiktok_product_id": str(prod.get("id") or ""),
+            "title":             prod.get("title", ""),
+            "stock":             stock,
+        })
+    return rows

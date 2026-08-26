@@ -2077,7 +2077,93 @@ def render_tiktok_page(inventory_rows: list[dict]):
     st.markdown(cards_html, unsafe_allow_html=True)
 
     # ── Tabs ──────────────────────────────────────────────────
-    t_view, t_import = st.tabs(["📊 Overview & edit", "📥 Import CSV"])
+    t_view, t_map, t_import = st.tabs(
+        ["📊 Overview & edit", "🔗 Map TikTok Products", "📥 Import CSV"]
+    )
+
+    # ── Tab: Map TikTok Products → ASINs ──────────────────────
+    with t_map:
+        st.caption(
+            "Used when TikTok's `seller_sku` field is empty in the API "
+            "response. Assign each TikTok product to its matching ASIN — "
+            "the next 🧪 Test / 🔄 Sync will use these mappings to route "
+            "inventory to the right ASIN."
+        )
+        if st.button("🔄 Fetch current TikTok product list", key="tk_fetch_map"):
+            with st.spinner("Fetching from TikTok…"):
+                try:
+                    from backend.fetchers.tiktok_inventory import (
+                        fetch_tiktok_products_for_mapping,
+                    )
+                    products = fetch_tiktok_products_for_mapping()
+                    st.session_state["tk_map_products"] = products
+                    st.success(f"Loaded {len(products)} products.")
+                except Exception as exc:
+                    st.error(f"Fetch failed: {exc}")
+
+        existing_map: dict[str, str] = {}
+        try:
+            from supabase import create_client as _cc
+            _adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+            rows_m = _adm.table("tiktok_product_map").select("*").execute().data or []
+            existing_map = {r["tiktok_product_id"]: r["asin"] for r in rows_m}
+        except Exception:
+            st.warning(
+                "The `tiktok_product_map` table doesn't exist yet — run the "
+                "SQL provided in chat, then reload this page."
+            )
+
+        tk_products = st.session_state.get("tk_map_products", [])
+        if tk_products:
+            asin_options = [""] + all_asins
+            map_rows_view = []
+            for p in tk_products:
+                map_rows_view.append({
+                    "TikTok Product ID": p["tiktok_product_id"],
+                    "TikTok Title":      p["title"][:80],
+                    "Stock":             int(p["stock"]),
+                    "Mapped ASIN":       existing_map.get(p["tiktok_product_id"], ""),
+                })
+            df_map = pd.DataFrame(map_rows_view)
+            edited_map = st.data_editor(
+                df_map,
+                column_config={
+                    "TikTok Product ID": st.column_config.TextColumn(
+                        "TikTok Product ID", disabled=True),
+                    "TikTok Title":      st.column_config.TextColumn(
+                        "TikTok Title", disabled=True, width="large"),
+                    "Stock":             st.column_config.NumberColumn(
+                        "Stock", disabled=True),
+                    "Mapped ASIN":       st.column_config.SelectboxColumn(
+                        "Mapped ASIN", options=asin_options,
+                        help="Pick the Amazon ASIN this TikTok product corresponds to. "
+                             "Leave blank to skip this product."),
+                },
+                hide_index=True, use_container_width=True, key="tk_map_editor",
+                num_rows="fixed",
+            )
+            if st.button("💾 Save mappings", type="primary", key="save_tk_map"):
+                try:
+                    from supabase import create_client as _cc
+                    _adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+                    saved = 0
+                    for i, row in edited_map.iterrows():
+                        new_asin = str(row["Mapped ASIN"] or "").strip()
+                        if not new_asin:
+                            continue
+                        _adm.table("tiktok_product_map").upsert({
+                            "tiktok_product_id": row["TikTok Product ID"],
+                            "asin":              new_asin,
+                            "tiktok_title":      row["TikTok Title"],
+                        }, on_conflict="tiktok_product_id").execute()
+                        saved += 1
+                    st.success(f"Saved {saved} mapping(s). Now click 🧪 Test on "
+                               "Settings to re-sync inventory using these.")
+                except Exception as exc:
+                    st.error(f"Save failed: {exc}")
+        else:
+            st.info("Click **🔄 Fetch current TikTok product list** above to load "
+                    "your TikTok products, then assign each one an ASIN.")
 
     # ── Tab 1: Editable table ─────────────────────────────────
     with t_view:
