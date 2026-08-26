@@ -3645,12 +3645,16 @@ Full response for this shop:
                     try:
                         import hashlib, hmac, time, json as _dbg_json, httpx
                         path = "/product/202309/products/search"
-                        body = {"status": "ACTIVATE", "page_size": 100}
+                        body = {"status": "ACTIVATE"}   # filter
                         body_str = _dbg_json.dumps(body, separators=(",", ":"))
                         ts   = str(int(time.time()))
+                        # page_size / page_token are query params, not body
                         params = {
-                            "app_key": tk_key, "timestamp": ts,
-                            "shop_cipher": tk_cipher, "version": "202309",
+                            "app_key":     tk_key,
+                            "timestamp":   ts,
+                            "shop_cipher": tk_cipher,
+                            "version":     "202309",
+                            "page_size":   "100",
                         }
                         # Body is included in TikTok's sign for POST/JSON
                         concat   = "".join(f"{k}{v}" for k, v in sorted(params.items()))

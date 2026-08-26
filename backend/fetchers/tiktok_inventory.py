@@ -155,15 +155,25 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
     max_pages  = 30   # 30 × 100 products = 3000, way more than any shop needs
 
     for page_i in range(max_pages):
-        body   = {"status": "ACTIVATE", "page_size": 100}
+        # TikTok expects page_size / page_token as QUERY params, not body.
+        # Body holds the filter payload (status, category, etc.).
+        body   = {"status": "ACTIVATE"}
+        extra_qs = {"page_size": "100"}
         if page_token:
-            body["page_token"] = page_token
-        params = _base_params(app_key, app_secret, shop_cipher, _ENDPOINT, body=body)
+            extra_qs["page_token"] = page_token
+
+        # Merge extras into base params BEFORE signing (they participate in sig).
+        p = {
+            "app_key":     app_key,
+            "timestamp":   str(int(time.time())),
+            "shop_cipher": shop_cipher,
+            "version":     "202309",
+            **extra_qs,
+        }
+        p["sign"] = _sign(app_secret, _ENDPOINT, p, body=body)
+        params = p
 
         try:
-            # Use httpx content= with pre-serialized JSON so what we sign matches
-            # what we send byte-for-byte. httpx's json= re-serializes, which can
-            # subtly differ (spacing, key order) and break the signature.
             body_bytes = _json.dumps(body, separators=(",", ":")).encode()
             r = httpx.post(
                 _BASE_URL + _ENDPOINT,
