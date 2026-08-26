@@ -3626,18 +3626,45 @@ Full response for this shop:
                     st.error(f"Failed: {exc}")
         elif tk_key and tk_token and tk_cipher:
             st.success("✅ TikTok connected. Inventory will refresh on the next 🔄 Sync.")
-            if st.button("🧪 Test TikTok inventory pull now", key="tk_test"):
-                try:
-                    from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
-                    n, warnings = fetch_fbt_inventory()
-                    if n > 0:
-                        st.success(f"✅ Pulled inventory for {n} ASINs")
-                    else:
-                        st.warning("No ASINs updated — see warnings below.")
-                    for w in warnings:
-                        st.info(w)
-                except Exception as exc:
-                    st.error(f"Fetch failed: {exc}")
+            tc1, tc2 = st.columns([1, 1])
+            with tc1:
+                if st.button("🧪 Test TikTok inventory pull now", key="tk_test"):
+                    try:
+                        from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
+                        n, warnings = fetch_fbt_inventory()
+                        if n > 0:
+                            st.success(f"✅ Pulled inventory for {n} ASINs")
+                        else:
+                            st.warning("No ASINs updated — see warnings below.")
+                        for w in warnings:
+                            st.info(w)
+                    except Exception as exc:
+                        st.error(f"Fetch failed: {exc}")
+            with tc2:
+                if st.button("🔬 Show raw TikTok API response (debug)", key="tk_debug"):
+                    try:
+                        import hashlib, hmac, time, httpx
+                        path = "/fulfillment/202309/fbt/inventory/search"
+                        ts   = str(int(time.time()))
+                        params = {
+                            "app_key": tk_key, "timestamp": ts,
+                            "shop_cipher": tk_cipher, "version": "202309",
+                        }
+                        filtered = {k: v for k, v in params.items()}
+                        concat   = "".join(f"{k}{v}" for k, v in sorted(filtered.items()))
+                        payload_str = f"{tk_secret}{path}{concat}{tk_secret}"
+                        params["sign"] = hmac.new(tk_secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
+                        r = httpx.post(
+                            "https://open-api.tiktokglobalshop.com" + path,
+                            params=params, json={"page_size": 100},
+                            headers={"x-tts-access-token": tk_token,
+                                     "content-type": "application/json"},
+                            timeout=15,
+                        )
+                        st.code(f"HTTP {r.status_code}\n\n{r.text[:5000]}",
+                                language="json")
+                    except Exception as exc:
+                        st.error(f"Debug fetch failed: {exc}")
         elif not tk_key:
             st.info(
                 "Add `TIKTOK_APP_KEY` and `TIKTOK_APP_SECRET` to Streamlit Cloud "

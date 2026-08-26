@@ -147,17 +147,51 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
     if not all_items:
         return 0, (warnings or ["No FBT inventory items returned"])
 
-    # Aggregate per-SKU rows into per-ASIN totals. Each item typically has:
-    #   { "seller_sku": "...", "product_id": "...", "sku_id": "...",
-    #     "available_quantity": 123, "warehouse_id": "..." }
-    # We don't have a direct ASIN mapping (TikTok uses its own IDs) — fall
-    # back to seller_sku as the join key against products.sku.
+    # Aggregate per-SKU rows into per-ASIN totals.
+    # TikTok's FBT response can name the seller-facing SKU under several
+    # different keys depending on API version:
+    #   seller_sku, external_sku_id, merchant_sku_id, reference_code,
+    #   external_sku, sku_ref
+    # The user confirmed TikTok's "Reference code" == their Amazon SKU, so
+    # any of these fields (whichever is populated) is our join key.
+    _SKU_FIELDS = (
+        "seller_sku", "external_sku_id", "merchant_sku_id",
+        "reference_code", "external_sku", "sku_ref",
+    )
+
+    def _extract_sku(item: dict) -> str:
+        # Sometimes the SKU-level fields live one level deeper under `skus` or `sku`
+        for f in _SKU_FIELDS:
+            v = (item.get(f) or "").strip()
+            if v:
+                return v
+        # Nested: item.sku.seller_sku or item.skus[0].seller_sku
+        nested = item.get("sku") or {}
+        for f in _SKU_FIELDS:
+            v = (nested.get(f) or "").strip()
+            if v:
+                return v
+        return ""
+
+    def _extract_qty(item: dict) -> int:
+        # Common keys: available_quantity, quantity, warehouse_stock,
+        # sellable_quantity, fbt_available_qty
+        for f in ("available_quantity", "sellable_quantity",
+                  "warehouse_stock", "fbt_available_qty", "quantity"):
+            v = item.get(f)
+            if v is not None:
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    continue
+        return 0
+
     per_sku: dict[str, int] = {}
     for it in all_items:
-        sku = (it.get("seller_sku") or "").strip()
+        sku = _extract_sku(it)
         if not sku:
             continue
-        qty = int(it.get("available_quantity") or 0)
+        qty = _extract_qty(it)
         per_sku[sku] = per_sku.get(sku, 0) + qty
 
     # Look up ASIN by SKU
