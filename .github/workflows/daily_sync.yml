@@ -1,0 +1,104 @@
+name: Daily Inventory Sync
+
+on:
+  schedule:
+    # Every day at 05:30 UTC (07:30 Spain / 08:30 CEST summer).
+    # Runs BEFORE the 08:17 UTC alert email so email fires on fresh data.
+    # NOTE: cron on the hour gets delayed by GitHub during high load —
+    # off-hour minute (30) is more reliable.
+    - cron: '30 5 * * *'
+  workflow_dispatch:        # Manual trigger from GitHub Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run full sync
+        env:
+          # Supabase
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY:         ${{ secrets.SUPABASE_ANON_KEY }}
+          # Amazon SP-API
+          LWA_APP_ID:                ${{ secrets.LWA_APP_ID }}
+          LWA_CLIENT_SECRET:         ${{ secrets.LWA_CLIENT_SECRET }}
+          SP_API_REFRESH_TOKEN:      ${{ secrets.SP_API_REFRESH_TOKEN }}
+          AWS_ACCESS_KEY_ID:         ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY:     ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SELLER_ID:                 ${{ secrets.SELLER_ID }}
+          # TikTok Shop
+          TIKTOK_APP_KEY:            ${{ secrets.TIKTOK_APP_KEY }}
+          TIKTOK_APP_SECRET:         ${{ secrets.TIKTOK_APP_SECRET }}
+          TIKTOK_ACCESS_TOKEN:       ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_SHOP_CIPHER:        ${{ secrets.TIKTOK_SHOP_CIPHER }}
+        run: |
+          python -c "
+          import sys, logging
+          logging.basicConfig(level=logging.INFO,
+              format='%(asctime)s  %(levelname)-7s  %(name)s  %(message)s',
+              datefmt='%H:%M:%S')
+          log = logging.getLogger('daily_sync')
+
+          # 1. Catalog (product names, SKUs)
+          log.info('=== catalog ===')
+          try:
+              from backend.fetchers.catalog import fetch_catalog
+              fetch_catalog()
+          except Exception as e:
+              log.error('catalog failed: %s', e)
+
+          # 2. Amazon FBA inventory
+          log.info('=== amazon inventory ===')
+          try:
+              from backend.fetchers.inventory import fetch_all_inventory
+              fetch_all_inventory()
+          except Exception as e:
+              log.error('inventory failed: %s', e)
+
+          # 3. Amazon sales velocity
+          log.info('=== amazon sales ===')
+          try:
+              from backend.fetchers.sales import fetch_all_sales
+              fetch_all_sales()
+          except Exception as e:
+              log.error('sales failed: %s', e)
+
+          # 4. TikTok FBT inventory (optional — only if creds set)
+          import os as _os
+          if all(_os.getenv(k) for k in
+                 ('TIKTOK_APP_KEY','TIKTOK_APP_SECRET',
+                  'TIKTOK_ACCESS_TOKEN','TIKTOK_SHOP_CIPHER')):
+              log.info('=== tiktok inventory ===')
+              try:
+                  from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
+                  n, warnings = fetch_fbt_inventory()
+                  log.info('tiktok  %d ASINs updated', n)
+                  for w in warnings:
+                      log.warning('tiktok  %s', w)
+              except Exception as e:
+                  log.error('tiktok failed: %s', e)
+          else:
+              log.info('tiktok credentials missing — skipping')
+
+          # 5. Reorder alerts (recomputed from latest data)
+          log.info('=== reorder alerts ===')
+          try:
+              from backend.reorder import calculate_reorder_alerts
+              calculate_reorder_alerts()
+          except Exception as e:
+              log.error('reorder failed: %s', e)
+
+          log.info('=== daily sync complete ===')
+          "
