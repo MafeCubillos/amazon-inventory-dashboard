@@ -3732,6 +3732,38 @@ Full response for this shop:
                     st.error(f"Failed: {exc}")
         elif tk_key and tk_token and tk_cipher:
             st.success("✅ TikTok connected. Inventory will refresh on the next 🔄 Sync.")
+
+            # Token refresh row — access tokens expire (~24h to a few days
+            # depending on TikTok's policy). If the fetch/test button fails
+            # with "Expired credentials", click here first.
+            with st.expander("🔑 Access token expired? Refresh it here"):
+                st.caption(
+                    "Access tokens are short-lived. If you get 'Expired credentials' "
+                    "errors, refresh using your stored refresh token — then paste the "
+                    "new values into Streamlit Secrets and reboot."
+                )
+                tk_refresh = os.getenv("TIKTOK_REFRESH_TOKEN", "").strip()
+                if not tk_refresh:
+                    st.error(
+                        "TIKTOK_REFRESH_TOKEN not set in secrets. You'll need to "
+                        "re-authorize the app: click the authorize link (only shows "
+                        "when access token is empty) and repeat the OAuth flow."
+                    )
+                elif st.button("🔑 Refresh access token now", key="tk_refresh_btn"):
+                    try:
+                        from backend.tiktok_oauth import refresh_access_token
+                        data = refresh_access_token(tk_key, tk_secret, tk_refresh)
+                        st.success("New tokens obtained! Copy these into Streamlit Secrets:")
+                        st.code(f"""TIKTOK_ACCESS_TOKEN  = "{data.get('access_token', '')}"
+TIKTOK_REFRESH_TOKEN = "{data.get('refresh_token', '')}"
+
+Access token expires in: {data.get('access_token_expire_in', '?')} seconds
+Refresh token expires in: {data.get('refresh_token_expire_in', '?')} seconds""",
+                                language="toml")
+                        st.warning("After pasting into Secrets, reboot the app.")
+                    except Exception as exc:
+                        st.error(f"Refresh failed: {exc}")
+
             tc1, tc2 = st.columns([1, 1])
             with tc1:
                 if st.button("🧪 Test TikTok inventory pull now", key="tk_test"):
