@@ -139,30 +139,36 @@ def _extract_stock(sku_obj: dict) -> int:
 
 def fetch_fbt_inventory() -> tuple[int, list[str]]:
     """Query TikTok's Product Search for every product's SKU inventory and
-    upsert into tiktok_stock. Returns (num_asins_updated, warnings)."""
-    app_key      = os.getenv("TIKTOK_APP_KEY", "").strip()
-    app_secret   = os.getenv("TIKTOK_APP_SECRET", "").strip()
-    access_token = os.getenv("TIKTOK_ACCESS_TOKEN", "").strip()
-    shop_cipher  = os.getenv("TIKTOK_SHOP_CIPHER", "").strip()
+    upsert into tiktok_stock. Returns (num_asins_updated, warnings).
+
+    Auto-refreshes the access token on 401 (expired) using the refresh token
+    stored in Supabase tiktok_tokens table. No manual intervention needed
+    when the daily access token expires.
+    """
+    from backend.tiktok_tokens import get_tokens, refresh_and_persist
+
+    app_key    = os.getenv("TIKTOK_APP_KEY", "").strip()
+    app_secret = os.getenv("TIKTOK_APP_SECRET", "").strip()
+    tokens     = get_tokens()
+    access_token = tokens["access_token"]
+    shop_cipher  = tokens["shop_cipher"]
 
     if not all([app_key, app_secret, access_token, shop_cipher]):
         return 0, ["TikTok credentials not configured (need TIKTOK_APP_KEY, "
-                   "TIKTOK_APP_SECRET, TIKTOK_ACCESS_TOKEN, TIKTOK_SHOP_CIPHER)"]
+                   "TIKTOK_APP_SECRET, and tokens in Supabase tiktok_tokens "
+                   "or env fallback TIKTOK_ACCESS_TOKEN/SHOP_CIPHER)"]
 
     warnings: list[str] = []
     all_products: list[dict] = []
     page_token = ""
     max_pages  = 30   # 30 × 100 products = 3000, way more than any shop needs
+    refreshed_once = False   # to prevent infinite refresh loops
 
-    for page_i in range(max_pages):
-        # TikTok expects page_size / page_token as QUERY params, not body.
-        # Body holds the filter payload (status, category, etc.).
+    def _do_request(token: str, page_tok: str):
         body   = {"status": "ACTIVATE"}
         extra_qs = {"page_size": "100"}
-        if page_token:
-            extra_qs["page_token"] = page_token
-
-        # Merge extras into base params BEFORE signing (they participate in sig).
+        if page_tok:
+            extra_qs["page_token"] = page_tok
         p = {
             "app_key":     app_key,
             "timestamp":   str(int(time.time())),
@@ -171,23 +177,42 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
             **extra_qs,
         }
         p["sign"] = _sign(app_secret, _ENDPOINT, p, body=body)
-        params = p
+        body_bytes = _json.dumps(body, separators=(",", ":")).encode()
+        return httpx.post(
+            _BASE_URL + _ENDPOINT,
+            params=p,
+            content=body_bytes,
+            headers={
+                "x-tts-access-token": token,
+                "content-type":       "application/json",
+            },
+            timeout=15,
+        )
 
+    def _is_expired_response(status: int, body_text: str) -> bool:
+        if status == 401:
+            return True
+        # Sometimes TikTok returns 200 with an "expired" error code in body
+        return ("Expired credentials" in body_text
+                or "access_token" in body_text.lower() and "expired" in body_text.lower())
+
+    for page_i in range(max_pages):
         try:
-            body_bytes = _json.dumps(body, separators=(",", ":")).encode()
-            r = httpx.post(
-                _BASE_URL + _ENDPOINT,
-                params=params,
-                content=body_bytes,
-                headers={
-                    "x-tts-access-token": access_token,
-                    "content-type":       "application/json",
-                },
-                timeout=15,
-            )
+            r = _do_request(access_token, page_token)
         except Exception as exc:
             warnings.append(f"HTTP error on page {page_i}: {exc}")
             break
+
+        # Auto-refresh on 401 (expired token) and retry once
+        if _is_expired_response(r.status_code, r.text) and not refreshed_once:
+            refreshed_once = True
+            try:
+                access_token = refresh_and_persist()
+                logger.info("tiktok  auto-refreshed access token — retrying")
+                r = _do_request(access_token, page_token)
+            except Exception as exc:
+                warnings.append(f"Token refresh failed: {exc}")
+                break
 
         if r.status_code != 200:
             warnings.append(f"HTTP {r.status_code} on page {page_i}: {r.text[:200]}")
@@ -284,31 +309,26 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
 
 
 def fetch_tiktok_products_for_mapping() -> tuple[list[dict], list[str]]:
-    """Return (products, warnings) — every TikTok product with (id, title, stock)
-    for the mapping UI, plus any warning strings so the caller can surface
-    them instead of silently returning an empty list."""
+    """Return (products, warnings). Also auto-refreshes on 401."""
+    from backend.tiktok_tokens import get_tokens, refresh_and_persist
+
     warnings: list[str] = []
-    app_key      = os.getenv("TIKTOK_APP_KEY", "").strip()
-    app_secret   = os.getenv("TIKTOK_APP_SECRET", "").strip()
-    access_token = os.getenv("TIKTOK_ACCESS_TOKEN", "").strip()
-    shop_cipher  = os.getenv("TIKTOK_SHOP_CIPHER", "").strip()
+    app_key    = os.getenv("TIKTOK_APP_KEY", "").strip()
+    app_secret = os.getenv("TIKTOK_APP_SECRET", "").strip()
+    tokens     = get_tokens()
+    access_token = tokens["access_token"]
+    shop_cipher  = tokens["shop_cipher"]
 
-    missing = [k for k, v in {
-        "TIKTOK_APP_KEY":       app_key,
-        "TIKTOK_APP_SECRET":    app_secret,
-        "TIKTOK_ACCESS_TOKEN":  access_token,
-        "TIKTOK_SHOP_CIPHER":   shop_cipher,
-    }.items() if not v]
-    if missing:
-        return [], [f"Missing credentials: {', '.join(missing)}"]
+    if not (app_key and app_secret and access_token and shop_cipher):
+        return [], ["Missing TikTok credentials — App Key/Secret in env, "
+                    "tokens in Supabase tiktok_tokens (or env fallback)."]
+    refreshed_once = False
 
-    all_products: list[dict] = []
-    page_token = ""
-    for page_i in range(30):
+    def _req(tok: str, ptok: str):
         body   = {"status": "ACTIVATE"}
         extra_qs = {"page_size": "100"}
-        if page_token:
-            extra_qs["page_token"] = page_token
+        if ptok:
+            extra_qs["page_token"] = ptok
         p = {
             "app_key": app_key, "timestamp": str(int(time.time())),
             "shop_cipher": shop_cipher, "version": "202309",
@@ -316,16 +336,29 @@ def fetch_tiktok_products_for_mapping() -> tuple[list[dict], list[str]]:
         }
         p["sign"] = _sign(app_secret, _ENDPOINT, p, body=body)
         body_bytes = _json.dumps(body, separators=(",", ":")).encode()
+        return httpx.post(
+            _BASE_URL + _ENDPOINT, params=p, content=body_bytes,
+            headers={"x-tts-access-token": tok, "content-type": "application/json"},
+            timeout=15,
+        )
+
+    all_products: list[dict] = []
+    page_token = ""
+    for page_i in range(30):
         try:
-            r = httpx.post(
-                _BASE_URL + _ENDPOINT, params=p, content=body_bytes,
-                headers={"x-tts-access-token": access_token,
-                         "content-type": "application/json"},
-                timeout=15,
-            )
+            r = _req(access_token, page_token)
         except Exception as exc:
             warnings.append(f"HTTP error on page {page_i}: {exc}")
             break
+        # Auto-refresh on 401 once
+        if (r.status_code == 401 or "Expired credentials" in r.text) and not refreshed_once:
+            refreshed_once = True
+            try:
+                access_token = refresh_and_persist()
+                r = _req(access_token, page_token)
+            except Exception as exc:
+                warnings.append(f"Token refresh failed: {exc}")
+                break
         if r.status_code != 200:
             warnings.append(f"HTTP {r.status_code} on page {page_i}: {r.text[:200]}")
             break

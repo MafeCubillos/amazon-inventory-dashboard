@@ -3733,10 +3733,39 @@ Full response for this shop:
         elif tk_key and tk_token and tk_cipher:
             st.success("✅ TikTok connected. Inventory will refresh on the next 🔄 Sync.")
 
-            # Token refresh row — access tokens expire (~24h to a few days
-            # depending on TikTok's policy). If the fetch/test button fails
-            # with "Expired credentials", click here first.
-            with st.expander("🔑 Access token expired? Refresh it here"):
+            # Migrate env-var tokens into Supabase so the fetcher can
+            # auto-refresh on 401 without needing the user to update secrets.
+            with st.expander("♻️ Auto-refresh setup (one-time migration)"):
+                st.caption(
+                    "Copy your current TikTok tokens from env vars into the "
+                    "Supabase `tiktok_tokens` table so the fetcher can "
+                    "auto-refresh on 401 without needing you to update "
+                    "Streamlit / GitHub Secrets by hand every time."
+                )
+                try:
+                    from backend.tiktok_tokens import get_tokens as _get_tt, save_tokens as _save_tt
+                    cur = _get_tt()
+                    st.caption(f"Current source: **{cur.get('source', '?')}** — "
+                               f"access_token set: {bool(cur.get('access_token'))} · "
+                               f"refresh_token set: {bool(cur.get('refresh_token'))} · "
+                               f"shop_cipher set: {bool(cur.get('shop_cipher'))}")
+                    tk_refresh_env = os.getenv("TIKTOK_REFRESH_TOKEN", "").strip()
+                    if st.button("♻️ Migrate tokens to Supabase now", key="tk_migrate"):
+                        ok = _save_tt(tk_token, tk_refresh_env or cur.get("refresh_token", ""),
+                                      tk_cipher, access_expires_in_sec=None)
+                        if ok:
+                            st.success("Tokens saved to Supabase! You can now remove "
+                                       "TIKTOK_ACCESS_TOKEN & TIKTOK_REFRESH_TOKEN from "
+                                       "Streamlit and GitHub Secrets — the fetcher will "
+                                       "auto-refresh from Supabase from now on.")
+                        else:
+                            st.error("Save failed — check the tiktok_tokens table exists "
+                                     "in Supabase (SQL was provided in chat).")
+                except Exception as exc:
+                    st.error(f"Setup failed: {exc}")
+
+            # Token refresh row — for the manual case (e.g. before migration).
+            with st.expander("🔑 Manually refresh access token"):
                 st.caption(
                     "Access tokens are short-lived. If you get 'Expired credentials' "
                     "errors, refresh using your stored refresh token — then paste the "
