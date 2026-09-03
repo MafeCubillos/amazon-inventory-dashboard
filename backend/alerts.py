@@ -50,7 +50,7 @@ def _load_alert_data() -> list[dict]:
         products = {
             r["asin"]: r
             for r in (db_admin.table("products").select(
-                "asin,product_name,lead_time_days"
+                "asin,product_name,lead_time_days,target_days_coverage"
             ).execute().data or [])
         }
 
@@ -142,14 +142,17 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
 
     # 3. Build alert rows
     out: list[dict] = []
+    logger.info("alerts  tiktok: %d ASINs with stock, %d ASINs with TT forecast",
+                len(tt_units), len(tt_vel))
     for asin, units in tt_units.items():
         if asin not in products:
             continue
         vel = tt_vel.get(asin, 0.0)
         if vel <= 0:
             continue   # no forecast → can't compute alert
-        p        = products[asin]
-        lead     = int(p.get("lead_time_days") or 30)
+        p         = products[asin]
+        lead      = int(p.get("lead_time_days")       or 30)
+        target    = int(p.get("target_days_coverage") or 60)
         days_left = round(units / vel, 1) if vel > 0 else 9999
         # Same status thresholds as reorder module
         if days_left < lead:
@@ -159,7 +162,6 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
         else:
             continue   # ok → skip
         # Reorder qty to reach target coverage
-        target      = 60  # same default as reorder module
         reorder_qty = max(0, int(round((target - days_left) * vel)))
         if reorder_qty <= 0:
             continue
@@ -173,6 +175,7 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
             "reorder_qty": reorder_qty,
             "lead":        lead,
         })
+    logger.info("alerts  tiktok: %d alert rows generated", len(out))
     return out
 
 
