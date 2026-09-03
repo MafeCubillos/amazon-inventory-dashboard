@@ -2105,9 +2105,19 @@ def render_tiktok_page(inventory_rows: list[dict]):
                     from backend.fetchers.tiktok_inventory import (
                         fetch_tiktok_products_for_mapping,
                     )
-                    products = fetch_tiktok_products_for_mapping()
+                    result = fetch_tiktok_products_for_mapping()
+                    # Backwards compatible with either signature
+                    if isinstance(result, tuple):
+                        products, warnings = result
+                    else:
+                        products, warnings = result, []
                     st.session_state["tk_map_products"] = products
-                    st.success(f"Loaded {len(products)} products.")
+                    if products:
+                        st.success(f"Loaded {len(products)} products.")
+                    else:
+                        st.error("Loaded 0 products — see warnings below.")
+                    for w in warnings:
+                        st.warning(w)
                 except Exception as exc:
                     st.error(f"Fetch failed: {exc}")
 

@@ -283,23 +283,28 @@ def fetch_fbt_inventory() -> tuple[int, list[str]]:
     return updated, warnings
 
 
-def fetch_tiktok_products_for_mapping() -> list[dict]:
-    """Return every TikTok product with (id, title, stock) for the mapping UI.
-
-    Uses the same API call as fetch_fbt_inventory but returns raw rows so the
-    dashboard can render a table where the user picks an ASIN for each.
-    """
+def fetch_tiktok_products_for_mapping() -> tuple[list[dict], list[str]]:
+    """Return (products, warnings) — every TikTok product with (id, title, stock)
+    for the mapping UI, plus any warning strings so the caller can surface
+    them instead of silently returning an empty list."""
+    warnings: list[str] = []
     app_key      = os.getenv("TIKTOK_APP_KEY", "").strip()
     app_secret   = os.getenv("TIKTOK_APP_SECRET", "").strip()
     access_token = os.getenv("TIKTOK_ACCESS_TOKEN", "").strip()
     shop_cipher  = os.getenv("TIKTOK_SHOP_CIPHER", "").strip()
 
-    if not all([app_key, app_secret, access_token, shop_cipher]):
-        return []
+    missing = [k for k, v in {
+        "TIKTOK_APP_KEY":       app_key,
+        "TIKTOK_APP_SECRET":    app_secret,
+        "TIKTOK_ACCESS_TOKEN":  access_token,
+        "TIKTOK_SHOP_CIPHER":   shop_cipher,
+    }.items() if not v]
+    if missing:
+        return [], [f"Missing credentials: {', '.join(missing)}"]
 
     all_products: list[dict] = []
     page_token = ""
-    for _ in range(30):
+    for page_i in range(30):
         body   = {"status": "ACTIVATE"}
         extra_qs = {"page_size": "100"}
         if page_token:
@@ -318,20 +323,24 @@ def fetch_tiktok_products_for_mapping() -> list[dict]:
                          "content-type": "application/json"},
                 timeout=15,
             )
-            if r.status_code != 200:
-                break
-            payload = r.json()
-            if payload.get("code") != 0:
-                break
-            data = payload.get("data") or {}
-            all_products.extend(data.get("products") or [])
-            page_token = data.get("next_page_token") or ""
-            if not page_token:
-                break
-        except Exception:
+        except Exception as exc:
+            warnings.append(f"HTTP error on page {page_i}: {exc}")
+            break
+        if r.status_code != 200:
+            warnings.append(f"HTTP {r.status_code} on page {page_i}: {r.text[:200]}")
+            break
+        payload = r.json()
+        if payload.get("code") != 0:
+            warnings.append(f"API code {payload.get('code')}: {payload.get('message')}")
+            break
+        data = payload.get("data") or {}
+        got = data.get("products") or []
+        all_products.extend(got)
+        page_token = data.get("next_page_token") or ""
+        if not page_token:
             break
 
-    # Simplify for the UI: id, title, total stock
+    # Simplify for the UI
     rows = []
     for prod in all_products:
         stock = 0
@@ -342,4 +351,4 @@ def fetch_tiktok_products_for_mapping() -> list[dict]:
             "title":             prod.get("title", ""),
             "stock":             stock,
         })
-    return rows
+    return rows, warnings
