@@ -1014,7 +1014,17 @@ def sync_dialog():
                 from backend.fetchers.inventory import fetch_all_inventory
                 from backend.fetchers.sales import fetch_all_sales
                 from backend.reorder import calculate_reorder_alerts
-                fetch_catalog(); fetch_all_inventory(); fetch_all_sales(); calculate_reorder_alerts()
+                fetch_catalog(); fetch_all_inventory(); fetch_all_sales()
+                # TikTok inventory too, only if credentials are configured.
+                if all(os.getenv(k) for k in
+                       ("TIKTOK_APP_KEY", "TIKTOK_APP_SECRET",
+                        "TIKTOK_ACCESS_TOKEN", "TIKTOK_SHOP_CIPHER")):
+                    try:
+                        from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
+                        fetch_fbt_inventory()
+                    except Exception as _tt_exc:
+                        st.warning(f"TikTok sync skipped: {_tt_exc}")
+                calculate_reorder_alerts()
                 clear_caches(); st.success("Sync complete!"); st.rerun()
             except Exception as e:
                 st.error(f"Sync failed: {e}")
@@ -3902,11 +3912,28 @@ with c_sync:
                     fetch_catalog()
                     inv_results = fetch_all_inventory()
                     fetch_all_sales()
+
+                    # TikTok is optional — only runs if all 4 creds are set.
+                    # Non-fatal if it fails (keeps Amazon sync working solo).
+                    tt_n = 0
+                    tt_warnings: list[str] = []
+                    if all(os.getenv(k) for k in
+                           ("TIKTOK_APP_KEY", "TIKTOK_APP_SECRET",
+                            "TIKTOK_ACCESS_TOKEN", "TIKTOK_SHOP_CIPHER")):
+                        try:
+                            from backend.fetchers.tiktok_inventory import fetch_fbt_inventory
+                            tt_n, tt_warnings = fetch_fbt_inventory()
+                        except Exception as tt_exc:
+                            tt_warnings = [f"TikTok sync failed: {tt_exc}"]
+
                     calculate_reorder_alerts()
                     clear_caches()
                     total_rows = sum(inv_results.values()) if isinstance(inv_results, dict) else 0
-                    st.toast(f"✅ Sync complete — {total_rows} inventory rows across all marketplaces",
+                    tt_msg = f" · TikTok: {tt_n} ASINs" if tt_n else ""
+                    st.toast(f"✅ Sync complete — {total_rows} Amazon inventory rows{tt_msg}",
                              icon="✅")
+                    for w in tt_warnings[:3]:   # cap so toast queue doesn't overflow
+                        st.toast(f"⚠️ {w}", icon="⚠️")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Sync failed: {e}")
