@@ -24,7 +24,8 @@ from backend.database import db_admin
 
 logger = logging.getLogger(__name__)
 
-FLAGS = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹"}
+FLAGS = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹",
+         "NL": "🇳🇱", "BE": "🇧🇪", "IE": "🇮🇪", "TT": "🎵"}
 
 
 # ── Data helpers ───────────────────────────────────────────────────────────
@@ -83,6 +84,17 @@ def _load_alert_data() -> list[dict]:
                 "lead":        int(p.get("lead_time_days") or 30),
             })
 
+        # ── TikTok alerts (added as a 5th "marketplace" TT) ──────────
+        # Amazon reorder_alerts only cover ES/FR/DE/IT (from FBA inventory).
+        # For TT we compute alerts on the fly: units come from tiktok_stock
+        # (either manual or auto-synced from TikTok Shop API), velocity from
+        # the TT column of the Google Sheets forecast.
+        try:
+            tt_rows = _load_tiktok_alerts(products)
+            rows.extend(tt_rows)
+        except Exception as exc:
+            logger.warning("alerts  tiktok section failed: %s", exc)
+
         # Sort: critical first, then by days_left ascending
         rows.sort(key=lambda x: (0 if x["status"] == "critical" else 1, x["days_left"]))
         return rows
@@ -90,6 +102,78 @@ def _load_alert_data() -> list[dict]:
     except Exception as exc:
         logger.error("alerts  failed to load data: %s", exc)
         return []
+
+
+def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
+    """Compute TikTok alerts by combining tiktok_stock (units) with the
+    Google Sheets forecast (velocity). Returns rows with mp='TT' so they
+    fit into the same email table as Amazon markets."""
+    from datetime import date as _date
+
+    # 1. Current TikTok stock per ASIN
+    tt_rows = db_admin.table("tiktok_stock").select(
+        "asin,units"
+    ).execute().data or []
+    tt_units = {r["asin"]: int(r.get("units") or 0) for r in tt_rows}
+    if not tt_units:
+        return []
+
+    # 2. TikTok velocity from forecast (current month TT ÷ 30)
+    today = _date.today()
+    cur_ym = today.strftime("%Y-%m")
+    tt_vel: dict[str, float] = {}
+    try:
+        from backend.fetchers.forecast import fetch_forecast
+        fcst = fetch_forecast()
+    except Exception:
+        fcst = {}
+
+    for asin, info in (fcst or {}).items():
+        if not isinstance(info, dict):
+            continue
+        df = info.get("data")
+        if df is None or "TT" not in df.columns or cur_ym not in df.index:
+            continue
+        try:
+            monthly = float(df.loc[cur_ym, "TT"])
+            tt_vel[asin] = monthly / 30.0
+        except Exception:
+            continue
+
+    # 3. Build alert rows
+    out: list[dict] = []
+    for asin, units in tt_units.items():
+        if asin not in products:
+            continue
+        vel = tt_vel.get(asin, 0.0)
+        if vel <= 0:
+            continue   # no forecast → can't compute alert
+        p        = products[asin]
+        lead     = int(p.get("lead_time_days") or 30)
+        days_left = round(units / vel, 1) if vel > 0 else 9999
+        # Same status thresholds as reorder module
+        if days_left < lead:
+            status = "critical"
+        elif days_left < (lead + 15):
+            status = "warning"
+        else:
+            continue   # ok → skip
+        # Reorder qty to reach target coverage
+        target      = 60  # same default as reorder module
+        reorder_qty = max(0, int(round((target - days_left) * vel)))
+        if reorder_qty <= 0:
+            continue
+        out.append({
+            "asin":        asin,
+            "name":        p.get("product_name") or asin,
+            "mp":          "TT",
+            "flag":        FLAGS.get("TT", "🎵"),
+            "status":      status,
+            "days_left":   round(days_left, 0),
+            "reorder_qty": reorder_qty,
+            "lead":        lead,
+        })
+    return out
 
 
 # ── Email builder ──────────────────────────────────────────────────────────

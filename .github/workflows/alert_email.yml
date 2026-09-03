@@ -33,7 +33,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install supabase python-dotenv
+        # gspread + google-auth needed for the TikTok forecast fetch
+        # (the TT column in the Google Sheet feeds TikTok alerts)
+        run: pip install supabase python-dotenv gspread google-auth
 
       - name: Send alert email
         env:
@@ -43,6 +45,8 @@ jobs:
           ALERT_EMAIL_TO: ${{ github.event.inputs.to != '' && github.event.inputs.to || secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           ALERT_EMAIL_NOTE: ${{ github.event.inputs.note }}
+          # Google Sheets — needed for TikTok forecast to compute TT alerts
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python -c "
           import sys, logging
