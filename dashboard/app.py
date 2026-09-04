@@ -2239,7 +2239,24 @@ def render_tiktok_page(inventory_rows: list[dict]):
             # Days left uses REAL velocity if we have it, else forecast
             vel_for_days = tt_vel_real if tt_vel_real > 0 else tt_vel
             days_left = round(units / vel_for_days, 1) if vel_for_days > 0 else (9999 if units > 0 else 0)
-            days_lbl  = f"{days_left:.0f}d" if 0 < days_left < 9999 else ("∞" if units > 0 else "—")
+
+            # Status dot — matches Overview alert convention:
+            #   🔴 <14d  |  🟠 <30d  |  🟢 ≥30d  |  ⚫ no stock / no velocity
+            if units <= 0:
+                status_dot = "⚫"
+                days_lbl   = "—"
+            elif vel_for_days <= 0:
+                status_dot = "⚫"
+                days_lbl   = "∞"
+            elif days_left < 14:
+                status_dot = "🔴"
+                days_lbl   = f"{days_left:.0f}d"
+            elif days_left < 30:
+                status_dot = "🟠"
+                days_lbl   = f"{days_left:.0f}d"
+            else:
+                status_dot = "🟢"
+                days_lbl   = f"{days_left:.0f}d"
 
             rows_view.append({
                 "ASIN":            asin,
@@ -2248,11 +2265,35 @@ def render_tiktok_page(inventory_rows: list[dict]):
                 "TT vel (30d real)": tt_vel_real,
                 "TT sold 30d":     tt_units_30d,
                 "TT fc /day":      tt_vel,
+                "Status":          status_dot,   # 🔴/🟠/🟢/⚫
                 "Days left":       days_lbl,
                 "Last updated":    updated_lbl,
                 "Notes":           row.get("notes") or "",
             })
         df_view = pd.DataFrame(rows_view)
+
+        # Alert summary strip — matches Overview convention
+        n_red    = int((df_view["Status"] == "🔴").sum())
+        n_orange = int((df_view["Status"] == "🟠").sum())
+        n_green  = int((df_view["Status"] == "🟢").sum())
+        st.markdown(
+            f"""
+<div style="display:flex;gap:10px;margin:6px 0 14px 0">
+  <div style="flex:1;background:#FEE2E2;border:1px solid #FCA5A5;border-radius:8px;padding:10px 14px">
+    <div style="font-size:11px;color:#991B1B;font-weight:700;letter-spacing:.05em">🔴 URGENT (&lt;14d)</div>
+    <div style="font-size:22px;font-weight:800;color:#991B1B;line-height:1.1">{n_red}</div>
+  </div>
+  <div style="flex:1;background:#FED7AA;border:1px solid #FDBA74;border-radius:8px;padding:10px 14px">
+    <div style="font-size:11px;color:#9A3412;font-weight:700;letter-spacing:.05em">🟠 LOW (&lt;30d)</div>
+    <div style="font-size:22px;font-weight:800;color:#9A3412;line-height:1.1">{n_orange}</div>
+  </div>
+  <div style="flex:1;background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px">
+    <div style="font-size:11px;color:#065F46;font-weight:700;letter-spacing:.05em">🟢 HEALTHY</div>
+    <div style="font-size:22px;font-weight:800;color:#065F46;line-height:1.1">{n_green}</div>
+  </div>
+</div>""",
+            unsafe_allow_html=True,
+        )
 
         edited = st.data_editor(
             df_view,
@@ -2272,6 +2313,8 @@ def render_tiktok_page(inventory_rows: list[dict]):
                 "TT fc /day":   st.column_config.NumberColumn(
                                     "TT fc /day", format="%.2f", disabled=True,
                                     help="Current month TikTok forecast ÷ 30 (from Google Sheet TT column)."),
+                "Status":       st.column_config.TextColumn("●", disabled=True, width="small",
+                                    help="🔴 <14d urgent | 🟠 <30d low | 🟢 healthy | ⚫ no stock / no sales yet"),
                 "Days left":    st.column_config.TextColumn("Days left", disabled=True,
                                     help="TikTok units ÷ real velocity (falls back to forecast if no orders yet)."),
                 "Last updated": st.column_config.TextColumn("Last updated", disabled=True),

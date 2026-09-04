@@ -118,10 +118,26 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
     if not tt_units:
         return []
 
-    # 2. TikTok velocity from forecast (current month TT ÷ 30)
+    # 2. TikTok velocity — REAL 30d velocity from tiktok_velocity (Orders API)
+    #    takes precedence; fall back to forecast (current month TT ÷ 30) if
+    #    an ASIN has no real sales yet.
     today = _date.today()
     cur_ym = today.strftime("%Y-%m")
     tt_vel: dict[str, float] = {}
+
+    # 2a. Real velocity from Orders API (last 30 completed days)
+    try:
+        vel_rows = db_admin.table("tiktok_velocity").select(
+            "asin,velocity_daily"
+        ).execute().data or []
+        for r in vel_rows:
+            v = float(r.get("velocity_daily") or 0)
+            if v > 0:
+                tt_vel[r["asin"]] = v
+    except Exception as exc:
+        logger.warning("alerts  tiktok_velocity read failed: %s", exc)
+
+    # 2b. Forecast fallback for ASINs with no real sales yet
     try:
         from backend.fetchers.forecast import fetch_forecast
         fcst = fetch_forecast()
@@ -129,6 +145,8 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
         fcst = {}
 
     for asin, info in (fcst or {}).items():
+        if asin in tt_vel:
+            continue    # real velocity already set
         if not isinstance(info, dict):
             continue
         df = info.get("data")
@@ -136,7 +154,8 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
             continue
         try:
             monthly = float(df.loc[cur_ym, "TT"])
-            tt_vel[asin] = monthly / 30.0
+            if monthly > 0:
+                tt_vel[asin] = monthly / 30.0
         except Exception:
             continue
 
