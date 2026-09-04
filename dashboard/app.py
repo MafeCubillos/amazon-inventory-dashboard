@@ -3956,6 +3956,41 @@ Refresh token expires in: {data.get('refresh_token_expire_in', '?')} seconds""",
             )
 
     st.divider()
+
+    # ── Email alert preview ─────────────────────────────────
+    with st.container(border=True):
+        st.markdown("#### 📧 Mon/Thu email alert preview")
+        st.caption(
+            "See exactly what the Monday/Thursday alert email will look like, "
+            "using CURRENT inventory + velocity data. Nothing is sent."
+        )
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("👁️ Preview email now", key="email_preview_btn"):
+                st.session_state["_email_preview_html"] = None
+                with st.spinner("Building preview…"):
+                    try:
+                        from backend.alerts import _load_alert_data, _build_html
+                        rows = _load_alert_data()
+                        html = _build_html(rows)
+                        st.session_state["_email_preview_html"]  = html
+                        st.session_state["_email_preview_count"] = len(rows)
+                    except Exception as exc:
+                        st.error(f"Preview failed: {exc}")
+        with col_b:
+            if st.session_state.get("_email_preview_html"):
+                cnt = st.session_state.get("_email_preview_count", 0)
+                if cnt == 0:
+                    st.success("✅ No alerts right now — email would say 'all healthy'.")
+                else:
+                    st.info(f"📊 {cnt} alert row(s) would be included.")
+        if st.session_state.get("_email_preview_html"):
+            components.html(
+                st.session_state["_email_preview_html"],
+                height=650, scrolling=True,
+            )
+
+    st.divider()
     if st.button("↩️ Reset all to defaults", key="reset_settings_btn"):
         st.session_state.warn_buffer      = 15
         st.session_state.days_red         = 30
