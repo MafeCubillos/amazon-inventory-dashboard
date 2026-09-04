@@ -2010,6 +2010,20 @@ def _load_tiktok_stock() -> dict[str, dict]:
         return {}
 
 
+def _load_tiktok_velocity() -> dict[str, dict]:
+    """Return dict[asin] -> {units_sold_30d, velocity_daily, period_end_date}.
+    Populated by backend.fetchers.tiktok_sales. Empty dict if table missing."""
+    if DEMO_MODE:
+        return {}
+    try:
+        from supabase import create_client as _cc
+        adm = _cc(_SB_URL, os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+        rows = adm.table("tiktok_velocity").select("*").execute().data or []
+        return {r["asin"]: r for r in rows}
+    except Exception:
+        return {}
+
+
 def _save_tiktok_stock(asin: str, units: int, notes: str = "") -> bool:
     try:
         from supabase import create_client as _cc
@@ -2192,6 +2206,9 @@ def render_tiktok_page(inventory_rows: list[dict]):
             "Subtracts from supplier reorder need automatically."
         )
 
+        # Real 30d sales velocity from TikTok Orders API (populated by daily sync)
+        velocity_map = _load_tiktok_velocity()
+
         # Build display rows, with optional TT-forecast preview if available
         rows_view = []
         for asin in all_asins:
@@ -2214,17 +2231,26 @@ def render_tiktok_page(inventory_rows: list[dict]):
                     tt_next30 = int(fc.loc[cur_ym, "TT"])
                     tt_vel    = round(tt_next30 / 30, 2)
 
-            days_left = round(units / tt_vel, 1) if tt_vel > 0 else (9999 if units > 0 else 0)
+            # Real velocity from Orders API (last 30d) — preferred over forecast if present
+            vel_row       = velocity_map.get(asin) or {}
+            tt_vel_real   = float(vel_row.get("velocity_daily") or 0)
+            tt_units_30d  = int(vel_row.get("units_sold_30d") or 0)
+
+            # Days left uses REAL velocity if we have it, else forecast
+            vel_for_days = tt_vel_real if tt_vel_real > 0 else tt_vel
+            days_left = round(units / vel_for_days, 1) if vel_for_days > 0 else (9999 if units > 0 else 0)
             days_lbl  = f"{days_left:.0f}d" if 0 < days_left < 9999 else ("∞" if units > 0 else "—")
 
             rows_view.append({
-                "ASIN":         asin,
-                "Product":      asin_name.get(asin, asin)[:55],
-                "TikTok units": units,
-                "TT fc /day":   tt_vel,
-                "Days left":    days_lbl,
-                "Last updated": updated_lbl,
-                "Notes":        row.get("notes") or "",
+                "ASIN":            asin,
+                "Product":         asin_name.get(asin, asin)[:55],
+                "TikTok units":    units,
+                "TT vel (30d real)": tt_vel_real,
+                "TT sold 30d":     tt_units_30d,
+                "TT fc /day":      tt_vel,
+                "Days left":       days_lbl,
+                "Last updated":    updated_lbl,
+                "Notes":           row.get("notes") or "",
             })
         df_view = pd.DataFrame(rows_view)
 
@@ -2236,11 +2262,18 @@ def render_tiktok_page(inventory_rows: list[dict]):
                 "TikTok units": st.column_config.NumberColumn(
                                     "TikTok units", min_value=0, step=10,
                                     help="Units at TikTok fulfillment / allocated to TikTok."),
+                "TT vel (30d real)": st.column_config.NumberColumn(
+                                    "TT vel (30d real)", format="%.2f", disabled=True,
+                                    help="Real units/day from TikTok Orders API (last 30 completed days). "
+                                         "Populated by daily sync. 0 = no orders in that window."),
+                "TT sold 30d":  st.column_config.NumberColumn(
+                                    "TT sold 30d", disabled=True,
+                                    help="Total units sold on TikTok in the last 30 days."),
                 "TT fc /day":   st.column_config.NumberColumn(
                                     "TT fc /day", format="%.2f", disabled=True,
                                     help="Current month TikTok forecast ÷ 30 (from Google Sheet TT column)."),
                 "Days left":    st.column_config.TextColumn("Days left", disabled=True,
-                                    help="TikTok units ÷ TT forecast/day"),
+                                    help="TikTok units ÷ real velocity (falls back to forecast if no orders yet)."),
                 "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
                 "Notes":        st.column_config.TextColumn("Notes"),
             },
@@ -3351,7 +3384,8 @@ def render_forecast_page(rows: list[dict]):
         COUNTRIES = COUNTRIES + ["TT"]
     FLAGS_MAP = {"ES": "🇪🇸", "FR": "🇫🇷", "DE": "🇩🇪", "IT": "🇮🇹", "TT": "🎵"}
 
-    tt_stock_map = _load_tiktok_stock() if "TT" in COUNTRIES else {}
+    tt_stock_map    = _load_tiktok_stock()    if "TT" in COUNTRIES else {}
+    tt_velocity_map = _load_tiktok_velocity() if "TT" in COUNTRIES else {}
 
     country_data = {}
     for mp in COUNTRIES:
@@ -3360,11 +3394,17 @@ def render_forecast_page(rows: list[dict]):
             for m in months
         )
         if mp == "TT":
-            # TikTok: stock from tiktok_stock; no inbound; velocity derived from forecast
+            # TikTok: stock from tiktok_stock; no inbound.
+            # Velocity: prefer REAL 30d velocity from tiktok_velocity (populated
+            # by daily sync via TikTok Orders API); fall back to forecast if empty.
             tt_row  = tt_stock_map.get(dist_asin, {}) or {}
             stock   = int(tt_row.get("units") or 0)
             inbound = 0
-            vel     = round(fc_total / (30 * len(months)), 2) if len(months) else 0.0
+            real_vel = float((tt_velocity_map.get(dist_asin) or {}).get("velocity_daily") or 0)
+            if real_vel > 0:
+                vel = round(real_vel, 2)
+            else:
+                vel = round(fc_total / (30 * len(months)), 2) if len(months) else 0.0
         else:
             c_inv = {}
             if prod_row:
@@ -3807,6 +3847,19 @@ Refresh token expires in: {data.get('refresh_token_expire_in', '?')} seconds""",
                             st.info(w)
                     except Exception as exc:
                         st.error(f"Fetch failed: {exc}")
+
+                if st.button("💰 Test TikTok sales pull (last 30d)", key="tk_test_sales"):
+                    try:
+                        from backend.fetchers.tiktok_sales import fetch_tiktok_sales
+                        n, warnings = fetch_tiktok_sales()
+                        if n > 0:
+                            st.success(f"✅ Updated 30d velocity for {n} ASINs")
+                        else:
+                            st.warning("No ASINs updated — see warnings below.")
+                        for w in warnings:
+                            st.info(w)
+                    except Exception as exc:
+                        st.error(f"Sales fetch failed: {exc}")
             with tc2:
                 if st.button("🔬 Show raw TikTok API response (debug)", key="tk_debug"):
                     try:

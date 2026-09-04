@@ -89,6 +89,17 @@ jobs:
                       log.warning('tiktok  %s', w)
               except Exception as e:
                   log.error('tiktok failed: %s', e)
+
+              # 4b. TikTok sales (last 30 days → velocity table)
+              log.info('=== tiktok sales ===')
+              try:
+                  from backend.fetchers.tiktok_sales import fetch_tiktok_sales
+                  n_s, warns_s = fetch_tiktok_sales()
+                  log.info('tiktok sales  %d ASINs updated', n_s)
+                  for w in warns_s:
+                      log.warning('tiktok sales  %s', w)
+              except Exception as e:
+                  log.error('tiktok sales failed: %s', e)
           else:
               log.info('tiktok credentials missing — skipping')
 
