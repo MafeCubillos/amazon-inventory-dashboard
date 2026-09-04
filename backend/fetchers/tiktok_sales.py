@@ -53,14 +53,18 @@ def _sku_from_line_item(item: dict) -> str:
 
 
 def _qty_from_line_item(item: dict) -> int:
+    """TikTok v202309: each line_item is ONE unit (like Amazon). If a qty field
+    is present, honor it; otherwise assume 1."""
     for f in ("quantity", "sku_quantity", "unit_count"):
         v = item.get(f)
         if v is not None:
             try:
-                return int(v)
+                q = int(v)
+                if q > 0:
+                    return q
             except (TypeError, ValueError):
                 continue
-    return 0
+    return 1
 
 
 def fetch_tiktok_sales() -> tuple[int, list[str]]:
@@ -91,10 +95,10 @@ def fetch_tiktok_sales() -> tuple[int, list[str]]:
     refreshed_once = False
 
     def _do_request(token: str, page_tok: str):
-        # Body: order status = COMPLETED / SHIPPING / IN_TRANSIT / etc.
-        # For sales velocity we want COMPLETED orders (not cancelled).
+        # For velocity we want any order that was PAID and not cancelled/refunded.
+        # No order_status filter → all statuses returned; we exclude cancelled
+        # after the fact based on display_status/cancel_reason.
         body = {
-            "order_status":   "COMPLETED",
             "create_time_ge": start_ts,
             "create_time_lt": end_ts,
         }
@@ -158,51 +162,64 @@ def fetch_tiktok_sales() -> tuple[int, list[str]]:
                               f"(Try 'Show raw TikTok API response' if you have orders — "
                               f"they may be in a different status like AWAITING_SHIPMENT.)"]
 
-    # Aggregate units per SKU from line_items
-    per_sku: dict[str, int] = {}
-    total_line_items = 0
-    line_items_no_sku = 0
-    line_items_no_qty = 0
+    # Load ASIN mappings up-front — both the seller_sku path AND the
+    # tiktok_product_id fallback (used when seller_sku is empty, same as
+    # tiktok_inventory does).
+    sku_rows   = db_admin.table("products").select("asin,sku").execute().data or []
+    sku_to_asin = {r["sku"]: r["asin"] for r in sku_rows if r.get("sku")}
+    try:
+        map_rows = db_admin.table("tiktok_product_map").select("*").execute().data or []
+        product_id_to_asin = {r["tiktok_product_id"]: r["asin"] for r in map_rows}
+    except Exception:
+        product_id_to_asin = {}
+
+    # Aggregate units per ASIN directly from line_items — skip cancelled orders
+    per_asin: dict[str, int] = {}
+    total_line_items    = 0
+    line_items_no_match = 0
+    orders_skipped_cancelled = 0
+    unmatched_samples: list[str] = []
     sample_line_item = None
     for order in all_orders:
+        if (order.get("status") or "").upper() in ("CANCELLED", "CANCELED"):
+            orders_skipped_cancelled += 1
+            continue
         for li in (order.get("line_items") or []):
+            if (li.get("cancel_reason") or "") and (li.get("display_status") or "").upper() == "CANCELLED":
+                continue
             total_line_items += 1
             if sample_line_item is None:
                 sample_line_item = li
-            sku = _sku_from_line_item(li)
             qty = _qty_from_line_item(li)
-            if not sku:
-                line_items_no_sku += 1
+            sku = _sku_from_line_item(li)
+            asin = sku_to_asin.get(sku) if sku else None
+            if not asin:
+                pid = str(li.get("product_id") or "").strip()
+                asin = product_id_to_asin.get(pid)
+            if not asin:
+                line_items_no_match += 1
+                if len(unmatched_samples) < 5:
+                    unmatched_samples.append(
+                        f"product_id={li.get('product_id')} sku={sku!r} name={str(li.get('product_name'))[:40]}"
+                    )
                 continue
-            if not qty:
-                line_items_no_qty += 1
-                continue
-            per_sku[sku] = per_sku.get(sku, 0) + qty
+            per_asin[asin] = per_asin.get(asin, 0) + qty
 
     warnings.append(
-        f"Line items: {total_line_items} total, {line_items_no_sku} missing SKU, "
-        f"{line_items_no_qty} missing qty, {len(per_sku)} unique SKUs aggregated."
+        f"Orders: {len(all_orders)} fetched, {orders_skipped_cancelled} cancelled skipped. "
+        f"Line items: {total_line_items} total, {line_items_no_match} unmatched, "
+        f"{len(per_asin)} unique ASINs with sales."
     )
-    if sample_line_item and (line_items_no_sku or not per_sku):
+    if line_items_no_match and unmatched_samples:
+        warnings.append("Unmatched samples: " + " | ".join(unmatched_samples))
+    if sample_line_item and not per_asin:
         keys = list(sample_line_item.keys())
         warnings.append(f"Sample line_item fields: {keys}")
 
-    logger.info("tiktok_sales  %d orders → %d unique SKUs sold in last 30d",
-                len(all_orders), len(per_sku))
+    logger.info("tiktok_sales  %d orders → %d line items → %d ASINs",
+                len(all_orders), total_line_items, len(per_asin))
 
-    # Load ASIN mapping — try seller_sku first, fall back to tiktok_product_map
-    sku_rows = db_admin.table("products").select("asin,sku").execute().data or []
-    sku_to_asin = {r["sku"]: r["asin"] for r in sku_rows if r.get("sku")}
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    per_asin: dict[str, int] = {}
-    unmapped: list[str] = []
-    for sku, qty in per_sku.items():
-        asin = sku_to_asin.get(sku)
-        if not asin:
-            unmapped.append(sku)
-            continue
-        per_asin[asin] = per_asin.get(asin, 0) + qty
+    now_iso  = datetime.now(timezone.utc).isoformat()
 
     updated = 0
     for asin, units in per_asin.items():
@@ -217,10 +234,5 @@ def fetch_tiktok_sales() -> tuple[int, list[str]]:
             updated += 1
         except Exception as exc:
             warnings.append(f"Failed to save {asin}: {exc}")
-
-    if unmapped:
-        warnings.append(f"{len(unmapped)} TikTok SKU(s) sold but not mapped to any ASIN: "
-                        f"{', '.join(unmapped[:5])}"
-                        + ("…" if len(unmapped) > 5 else ""))
 
     return updated, warnings
