@@ -251,7 +251,7 @@ def _build_html(rows: list[dict]) -> str:
   <!-- Header -->
   <div style="background:#111;padding:24px 32px;display:flex;align-items:center;gap:16px">
     <div>
-      <div style="color:#C8FF00;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">Nyvos · Amazon EU Dashboard</div>
+      <div style="color:#C8FF00;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">Nyvos EU Dashboard</div>
       <div style="color:#fff;font-size:22px;font-weight:800;margin-top:4px">📦 Inventory Alert</div>
       <div style="color:#888;font-size:12px;margin-top:4px">{today}</div>
     </div>
@@ -292,7 +292,7 @@ def _build_html(rows: list[dict]) -> str:
   <!-- Footer -->
   <div style="padding:20px 32px;background:#F8F8F6;border-top:1px solid #EEE;text-align:center">
     <div style="font-size:12px;color:#999">
-      Sent automatically every Monday & Thursday · Nyvos Amazon EU Dashboard
+      Sent automatically every Monday & Thursday · Nyvos EU Dashboard
     </div>
   </div>
 
