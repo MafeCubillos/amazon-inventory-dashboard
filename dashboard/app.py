@@ -258,6 +258,17 @@ button[data-testid="baseButton-primary"]:hover {
 [data-baseweb="tag"] button:hover svg {
     fill: #fff !important;
 }
+/* ── Data editor / dataframe headers — dark like Overview HTML table ── */
+[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"],
+[data-testid="stDataFrame"] {
+    --gdg-header-bg: #111111;
+    --gdg-header-fg: #FFFFFF;
+    --gdg-header-icon-fg: #FFFFFF;
+    --gdg-accent-color: #C6FF00;
+    --gdg-header-bottom-border-color: #111111;
+    --gdg-horizontal-border-color: #E8E8E8;
+    --gdg-vertical-border-color: #E8E8E8;
+}
 </style>
 """, unsafe_allow_html=True)
 
