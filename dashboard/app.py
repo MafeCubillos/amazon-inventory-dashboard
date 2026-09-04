@@ -2082,18 +2082,18 @@ def render_tiktok_page(inventory_rows: list[dict]):
 
     cards_html = f'''
 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
-  <div style="background:#FCE7F3;border:1px solid #F5A8D0;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#9D174D;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Total TikTok stock</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_units:,}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">bottles at TikTok</div>
-  </div>
   <div style="background:#F4F4F2;border:1px solid #E0E0E0;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with stock</div>
+    <div style="font-size:11px;color:#666;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Total TikTok stock</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{total_units:,}</div>
+    <div style="font-size:12px;color:#888;margin-top:4px">bottles at TikTok</div>
+  </div>
+  <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with stock</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{asins_with_stock}</div>
     <div style="font-size:12px;color:#666;margin-top:4px">selling on TikTok</div>
   </div>
-  <div style="background:#E8F0FE;border:1px solid #B4CBF8;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#1A56DB;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with TT forecast</div>
+  <div style="background:#EAF3DE;border:1px solid #C8E0A5;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#3B6D11;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">ASINs with TT forecast</div>
     <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{asins_with_fc}</div>
     <div style="font-size:12px;color:#666;margin-top:4px">add a TT column in the sheet</div>
   </div>
