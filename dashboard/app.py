@@ -2252,7 +2252,7 @@ def render_tiktok_page(inventory_rows: list[dict]):
                 status_dot = "🔴"
                 days_lbl   = f"{days_left:.0f}d"
             elif days_left < 30:
-                status_dot = "🟠"
+                status_dot = "🟡"
                 days_lbl   = f"{days_left:.0f}d"
             else:
                 status_dot = "🟢"
@@ -2272,24 +2272,27 @@ def render_tiktok_page(inventory_rows: list[dict]):
             })
         df_view = pd.DataFrame(rows_view)
 
-        # Alert summary strip — matches Overview convention
+        # Alert summary strip — same look & palette as Overview's header cards
         n_red    = int((df_view["Status"] == "🔴").sum())
-        n_orange = int((df_view["Status"] == "🟠").sum())
+        n_yellow = int((df_view["Status"] == "🟡").sum())
         n_green  = int((df_view["Status"] == "🟢").sum())
         st.markdown(
             f"""
-<div style="display:flex;gap:10px;margin:6px 0 14px 0">
-  <div style="flex:1;background:#FEE2E2;border:1px solid #FCA5A5;border-radius:8px;padding:10px 14px">
-    <div style="font-size:11px;color:#991B1B;font-weight:700;letter-spacing:.05em">🔴 URGENT (&lt;14d)</div>
-    <div style="font-size:22px;font-weight:800;color:#991B1B;line-height:1.1">{n_red}</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:6px 0 16px 0">
+  <div style="background:{'#FCEBEB' if n_red>0 else '#F4F4F2'};border:1px solid {'#F0BABA' if n_red>0 else '#E0E0E0'};border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:{'#A32D2D' if n_red>0 else '#666'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🔴 Critical</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_red}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">under 14 days of stock</div>
   </div>
-  <div style="flex:1;background:#FED7AA;border:1px solid #FDBA74;border-radius:8px;padding:10px 14px">
-    <div style="font-size:11px;color:#9A3412;font-weight:700;letter-spacing:.05em">🟠 LOW (&lt;30d)</div>
-    <div style="font-size:22px;font-weight:800;color:#9A3412;line-height:1.1">{n_orange}</div>
+  <div style="background:{'#FEF3C7' if n_yellow>0 else '#F4F4F2'};border:1px solid {'#FCD34D' if n_yellow>0 else '#E0E0E0'};border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:{'#92400E' if n_yellow>0 else '#666'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🟡 Warning</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_yellow}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">under 30 days of stock</div>
   </div>
-  <div style="flex:1;background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px">
-    <div style="font-size:11px;color:#065F46;font-weight:700;letter-spacing:.05em">🟢 HEALTHY</div>
-    <div style="font-size:22px;font-weight:800;color:#065F46;line-height:1.1">{n_green}</div>
+  <div style="background:#EAF3DE;border:1px solid #C8E0A5;border-radius:10px;padding:16px 18px">
+    <div style="font-size:11px;color:#3B6D11;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🟢 Healthy</div>
+    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_green}</div>
+    <div style="font-size:12px;color:#666;margin-top:4px">30+ days runway</div>
   </div>
 </div>""",
             unsafe_allow_html=True,
@@ -2314,7 +2317,7 @@ def render_tiktok_page(inventory_rows: list[dict]):
                                     "TT fc /day", format="%.2f", disabled=True,
                                     help="Current month TikTok forecast ÷ 30 (from Google Sheet TT column)."),
                 "Status":       st.column_config.TextColumn("●", disabled=True, width="small",
-                                    help="🔴 <14d urgent | 🟠 <30d low | 🟢 healthy | ⚫ no stock / no sales yet"),
+                                    help="🔴 <14d critical | 🟡 <30d warning | 🟢 30d+ healthy | ⚫ no stock / no sales yet"),
                 "Days left":    st.column_config.TextColumn("Days left", disabled=True,
                                     help="TikTok units ÷ real velocity (falls back to forecast if no orders yet)."),
                 "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
