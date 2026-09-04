@@ -4124,11 +4124,13 @@ if DEMO_MODE:
 
 st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
-# ── Marketplace cards (always visible) ────────────────────────
-render_mp_cards(rows)
-
 # ── Page content driven by sidebar nav ────────────────────────
 page = st.session_state.get("page", "inventory")
+
+# ── Marketplace cards — only on Amazon-centric pages ──────────
+# TikTok / Labels / Local / Forecast / Settings have their own headers.
+if page in ("inventory", "reorder", "orders"):
+    render_mp_cards(rows)
 
 # ════════ PAGE: INVENTORY ════════
 if page == "inventory":
