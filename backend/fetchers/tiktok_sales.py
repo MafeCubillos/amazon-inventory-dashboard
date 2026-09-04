@@ -151,17 +151,41 @@ def fetch_tiktok_sales() -> tuple[int, list[str]]:
         if not page_token:
             break
 
+    warnings.append(f"Window: {start} → {end}. Fetched {len(all_orders)} orders.")
+
     if not all_orders:
-        return 0, (warnings or [f"No orders in the last 30 days ({start} → {end})"])
+        return 0, warnings + [f"No COMPLETED orders in the last 30 days. "
+                              f"(Try 'Show raw TikTok API response' if you have orders — "
+                              f"they may be in a different status like AWAITING_SHIPMENT.)"]
 
     # Aggregate units per SKU from line_items
     per_sku: dict[str, int] = {}
+    total_line_items = 0
+    line_items_no_sku = 0
+    line_items_no_qty = 0
+    sample_line_item = None
     for order in all_orders:
         for li in (order.get("line_items") or []):
+            total_line_items += 1
+            if sample_line_item is None:
+                sample_line_item = li
             sku = _sku_from_line_item(li)
             qty = _qty_from_line_item(li)
-            if sku and qty:
-                per_sku[sku] = per_sku.get(sku, 0) + qty
+            if not sku:
+                line_items_no_sku += 1
+                continue
+            if not qty:
+                line_items_no_qty += 1
+                continue
+            per_sku[sku] = per_sku.get(sku, 0) + qty
+
+    warnings.append(
+        f"Line items: {total_line_items} total, {line_items_no_sku} missing SKU, "
+        f"{line_items_no_qty} missing qty, {len(per_sku)} unique SKUs aggregated."
+    )
+    if sample_line_item and (line_items_no_sku or not per_sku):
+        keys = list(sample_line_item.keys())
+        warnings.append(f"Sample line_item fields: {keys}")
 
     logger.info("tiktok_sales  %d orders → %d unique SKUs sold in last 30d",
                 len(all_orders), len(per_sku))
