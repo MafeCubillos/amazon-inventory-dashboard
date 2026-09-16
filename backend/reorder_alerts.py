@@ -39,6 +39,8 @@ def _load_reorder_data() -> list[dict]:
     """
     today = date.today()
 
+    MARKETPLACES = ["ES", "FR", "DE", "IT"]
+
     # Product master
     prods = db_admin.table("products").select("*").execute().data or []
     products = {p["asin"]: p for p in prods}
@@ -74,13 +76,19 @@ def _load_reorder_data() -> list[dict]:
         if key not in latest_vel:
             latest_vel[key] = float(r.get("velocity_daily") or 0)
 
-    # Aggregate stock/inbound/velocity per ASIN
+    # Aggregate stock/velocity per ASIN across the 4 Amazon markets.
+    # NOTE: units_inbound is stored per-row but represents the EU-wide inbound
+    # (same value duplicated across ES/FR/DE/IT). Dashboard uses max() to
+    # avoid quadruple-counting; we do the same.
     agg: dict[str, dict] = {}
-    for (asin, mp), inv in latest_inv.items():
-        d = agg.setdefault(asin, {"stock": 0, "inbound": 0, "vel": 0.0})
-        d["stock"]   += int(inv.get("units_available") or 0)
-        d["inbound"] += int(inv.get("units_inbound")   or 0)
-        d["vel"]     += latest_vel.get((asin, mp), 0.0)
+    for asin in products:
+        d = {"stock": 0, "inbound": 0, "vel": 0.0}
+        for mp in MARKETPLACES:
+            inv = latest_inv.get((asin, mp), {})
+            d["stock"]   += int(inv.get("units_available") or 0)
+            d["inbound"] = max(d["inbound"], int(inv.get("units_inbound") or 0))
+            d["vel"]     += latest_vel.get((asin, mp), 0.0)
+        agg[asin] = d
 
     # Open POs (on order from supplier, not yet at FBA)
     try:
