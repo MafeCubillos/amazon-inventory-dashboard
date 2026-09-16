@@ -2,13 +2,23 @@ name: Inventory Alert Email
 
 on:
   schedule:
-    # Every Monday and Thursday at 8:17 AM UTC
-    # NOTE: GitHub Actions delays/skips cron jobs scheduled on the hour due to
-    # high load. Using off-hour minutes (e.g. 17) makes runs much more reliable.
-    - cron: '17 8 * * 1'   # Monday
-    - cron: '17 8 * * 4'   # Thursday
+    # Every Monday and Thursday, both emails ~5 min apart.
+    # GitHub Actions cron often delays 30–90 min, so we schedule EARLY to
+    # target arrival ~9:00–10:00 AM Spain (summer / CEST = UTC+2).
+    # Using off-hour minutes (00 / 05) still beats on-the-hour, and the
+    # 5-min gap between them keeps the two emails from arriving stacked.
+    - cron: '0 7 * * 1'    # Monday    07:00 UTC → 📦 Inventory
+    - cron: '5 7 * * 1'    # Monday    07:05 UTC → 🚚 Reorder
+    - cron: '0 7 * * 4'    # Thursday  07:00 UTC → 📦 Inventory
+    - cron: '5 7 * * 4'    # Thursday  07:05 UTC → 🚚 Reorder
   workflow_dispatch:        # Allow manual trigger from GitHub Actions tab
     inputs:
+      email_kind:
+        description: 'Which email to send'
+        required: true
+        type: choice
+        options: [inventory, reorder, both]
+        default: both
       note:
         description: 'Optional banner at the top of the email (e.g. correction notice)'
         required: false
@@ -34,10 +44,27 @@ jobs:
 
       - name: Install dependencies
         # gspread + google-auth needed for the TikTok forecast fetch
-        # (the TT column in the Google Sheet feeds TikTok alerts)
-        run: pip install supabase python-dotenv gspread google-auth
+        # (the TT column in the Google Sheet feeds TikTok alerts + reorder needs)
+        run: pip install supabase python-dotenv gspread google-auth httpx
 
-      - name: Send alert email
+      - name: Decide which email to send
+        id: pick
+        # Cron picks by minute: :00 = inventory, :05 = reorder.
+        # Manual dispatch honors the input.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "kind=${{ github.event.inputs.email_kind }}" >> "$GITHUB_OUTPUT"
+          else
+            MIN=$(date -u +%M)
+            if [ "$MIN" = "05" ]; then
+              echo "kind=reorder" >> "$GITHUB_OUTPUT"
+            else
+              echo "kind=inventory" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Send inventory email
+        if: steps.pick.outputs.kind == 'inventory' || steps.pick.outputs.kind == 'both'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -45,7 +72,6 @@ jobs:
           ALERT_EMAIL_TO: ${{ github.event.inputs.to != '' && github.event.inputs.to || secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
           ALERT_EMAIL_NOTE: ${{ github.event.inputs.note }}
-          # Google Sheets — needed for TikTok forecast to compute TT alerts
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python -c "
@@ -53,5 +79,25 @@ jobs:
           logging.basicConfig(level=logging.INFO)
           from backend.alerts import send_alert_email
           ok = send_alert_email()
+          sys.exit(0 if ok else 1)
+          "
+
+      - name: Send reorder email
+        if: steps.pick.outputs.kind == 'reorder' || steps.pick.outputs.kind == 'both'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          # Uses REORDER_EMAIL_TO if set (Mafe + Carlos), else falls back to ALERT_EMAIL_TO
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          REORDER_EMAIL_TO: ${{ github.event.inputs.to != '' && github.event.inputs.to || secrets.REORDER_EMAIL_TO }}
+          ALERT_EMAIL_PASSWORD: ${{ secrets.ALERT_EMAIL_PASSWORD }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          python -c "
+          import sys, logging
+          logging.basicConfig(level=logging.INFO)
+          from backend.reorder_alerts import send_reorder_email
+          ok = send_reorder_email()
           sys.exit(0 if ok else 1)
           "
