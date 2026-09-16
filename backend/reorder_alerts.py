@@ -43,36 +43,55 @@ def _load_reorder_data() -> list[dict]:
     prods = db_admin.table("products").select("*").execute().data or []
     products = {p["asin"]: p for p in prods}
 
-    # Latest inventory per ASIN (aggregate across countries)
-    inv_rows = db_admin.table("inventory_daily").select("*").execute().data or []
-    inv_by_asin: dict[str, dict] = {}
-    for r in inv_rows:
-        a = r["asin"]
-        cur = inv_by_asin.get(a)
-        if cur is None or (r.get("date") or "") > (cur.get("date") or ""):
-            inv_by_asin[a] = r
+    # Latest inventory per (asin, marketplace) — server-side desc sort so the
+    # newest snapshot survives the 1000-row REST limit.
+    inv_rows_raw = (
+        db_admin.table("inventory_snapshots")
+        .select("asin,marketplace,units_available,units_inbound,snapshot_date")
+        .order("snapshot_date", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    latest_inv: dict[tuple, dict] = {}
+    for r in inv_rows_raw:
+        key = (r["asin"], r["marketplace"])
+        if key not in latest_inv:
+            latest_inv[key] = r
 
-    # Aggregate across marketplaces per ASIN
+    # Latest velocity per (asin, marketplace)
+    vel_rows_raw = (
+        db_admin.table("sales_velocity")
+        .select("asin,marketplace,velocity_daily,period_end_date")
+        .order("period_end_date", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    latest_vel: dict[tuple, float] = {}
+    for r in vel_rows_raw:
+        key = (r["asin"], r["marketplace"])
+        if key not in latest_vel:
+            latest_vel[key] = float(r.get("velocity_daily") or 0)
+
+    # Aggregate stock/inbound/velocity per ASIN
     agg: dict[str, dict] = {}
-    for r in inv_rows:
-        a = r["asin"]
-        d = agg.setdefault(a, {"stock": 0, "inbound": 0, "vel": 0.0})
-        # Use only latest date per (asin, marketplace)
-        d["stock"]   += int(r.get("available")            or 0)
-        d["inbound"] += int(r.get("inbound_working")      or 0) \
-                      + int(r.get("inbound_shipped")      or 0) \
-                      + int(r.get("inbound_receiving")    or 0)
-        d["vel"]     += float(r.get("velocity_30d")       or 0)
+    for (asin, mp), inv in latest_inv.items():
+        d = agg.setdefault(asin, {"stock": 0, "inbound": 0, "vel": 0.0})
+        d["stock"]   += int(inv.get("units_available") or 0)
+        d["inbound"] += int(inv.get("units_inbound")   or 0)
+        d["vel"]     += latest_vel.get((asin, mp), 0.0)
 
     # Open POs (on order from supplier, not yet at FBA)
     try:
-        po_rows = db_admin.table("purchase_orders").select("asin,qty,status").execute().data or []
+        po_rows = db_admin.table("purchase_orders").select(
+            "asin,units_ordered,status"
+        ).in_("status", ["ordered", "shipped"]).execute().data or []
     except Exception:
         po_rows = []
     on_order: dict[str, int] = {}
     for po in po_rows:
-        if (po.get("status") or "").lower() in ("ordered", "shipped"):
-            on_order[po["asin"]] = on_order.get(po["asin"], 0) + int(po.get("qty") or 0)
+        on_order[po["asin"]] = on_order.get(po["asin"], 0) + int(po.get("units_ordered") or 0)
 
     # Local + TikTok stock (both reduce supplier need)
     try:
