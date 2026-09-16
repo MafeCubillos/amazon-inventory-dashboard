@@ -4008,6 +4008,41 @@ Refresh token expires in: {data.get('refresh_token_expire_in', '?')} seconds""",
                 height=650, scrolling=True,
             )
 
+    # ── Reorder alert email preview ─────────────────────────
+    with st.container(border=True):
+        st.markdown("#### 🚚 Mon/Thu Reorder Planner email preview")
+        st.caption(
+            "Shows the supplier reorder deadlines (🔴 now / 🟡 ≤14d / 🟠 ≤45d / "
+            "🔵 ≤90d). This is a SEPARATE email from the Inventory Alert — set "
+            "`REORDER_EMAIL_TO` in Secrets to route it to a different recipient "
+            "list (e.g. include Carlos), or leave empty to use ALERT_EMAIL_TO."
+        )
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("👁️ Preview reorder email", key="reorder_preview_btn"):
+                st.session_state["_reorder_preview_html"] = None
+                with st.spinner("Building preview…"):
+                    try:
+                        from backend.reorder_alerts import _load_reorder_data, build_reorder_html
+                        rows = _load_reorder_data()
+                        html = build_reorder_html(rows)
+                        st.session_state["_reorder_preview_html"]  = html
+                        st.session_state["_reorder_preview_count"] = len(rows)
+                    except Exception as exc:
+                        st.error(f"Preview failed: {exc}")
+        with col_b:
+            if st.session_state.get("_reorder_preview_html"):
+                cnt = st.session_state.get("_reorder_preview_count", 0)
+                if cnt == 0:
+                    st.success("✅ Nothing to reorder in the next 90 days.")
+                else:
+                    st.info(f"🚚 {cnt} ASIN(s) need a supplier PO in the next 90 days.")
+        if st.session_state.get("_reorder_preview_html"):
+            components.html(
+                st.session_state["_reorder_preview_html"],
+                height=750, scrolling=True,
+            )
+
     st.divider()
     if st.button("↩️ Reset all to defaults", key="reset_settings_btn"):
         st.session_state.warn_buffer      = 15
