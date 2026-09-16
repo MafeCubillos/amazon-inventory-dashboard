@@ -3487,29 +3487,44 @@ def render_forecast_page(rows: list[dict]):
     if st.button("🧮 Calculate Distribution", type="primary", key="calc_dist"):
         total_need = sum(v["need"] for v in country_data.values())
 
-        if total_need == 0:
-            raw_units = {mp: available / len(COUNTRIES) for mp in COUNTRIES}
-        else:
-            weights = {}
+        # Weight only countries that ACTUALLY need stock.
+        # Countries with need=0 (enough stock + inbound to cover the forecast
+        # window) get weight=0 so TT/others with healthy runway don't get
+        # unnecessary boxes.
+        weights: dict[str, float] = {}
+        if total_need > 0:
             for mp, d in country_data.items():
-                urgency = 1.0 / (d["days"] + 1)
+                if d["need"] <= 0:
+                    weights[mp] = 0.0
+                    continue
+                urgency = 1.0 / max(d["days"], 1)
                 weights[mp] = d["need"] + urgency * total_need * 0.2
-            total_w = sum(weights.values())
-            raw_units = {mp: available * w / total_w for mp, w in weights.items()}
+        else:
+            # Nothing urgently needs it — bias to lowest-coverage country
+            # (never split evenly across all, that gave TT stock it doesn't need).
+            for mp, d in country_data.items():
+                weights[mp] = 1.0 / max(d["days"], 1)
 
-        # Snap to whole boxes (ceiling), then cap total at available_boxes
+        total_w = sum(weights.values()) or 1.0
+        raw_units = {mp: available * w / total_w for mp, w in weights.items()}
+
+        # Snap to boxes: floor for tiny shares (< half a box), ceil otherwise.
+        # This stops a 0.05-box weight from becoming 1 whole box.
         sugg_boxes: dict[str, int] = {}
         for mp in COUNTRIES:
-            sugg_boxes[mp] = _math.ceil(raw_units[mp] / units_per_box)
-
-        # If ceiling pushed us over, trim from least-urgent countries
-        while sum(sugg_boxes.values()) * units_per_box > available and available_boxes > 0:
-            least_urgent = max(COUNTRIES, key=lambda m: country_data[m]["days"]
-                               if sugg_boxes[m] > 0 else -1)
-            if sugg_boxes[least_urgent] > 0:
-                sugg_boxes[least_urgent] -= 1
+            box_share = raw_units[mp] / units_per_box
+            if weights[mp] <= 0 or box_share < 0.5:
+                sugg_boxes[mp] = 0
             else:
+                sugg_boxes[mp] = _math.ceil(box_share)
+
+        # If ceiling pushed us over, trim from least-urgent country with boxes.
+        while sum(sugg_boxes.values()) * units_per_box > available and available_boxes > 0:
+            candidates = [m for m in COUNTRIES if sugg_boxes[m] > 0]
+            if not candidates:
                 break
+            least_urgent = max(candidates, key=lambda m: country_data[m]["days"])
+            sugg_boxes[least_urgent] -= 1
 
         st.session_state["dist_result"] = sugg_boxes
 
