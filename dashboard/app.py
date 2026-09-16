@@ -3452,14 +3452,17 @@ def render_forecast_page(rows: list[dict]):
         )
         if mp == "TT":
             # TikTok: stock from tiktok_stock; no inbound.
-            # Velocity: prefer REAL 30d velocity from tiktok_velocity (populated
-            # by daily sync via TikTok Orders API); fall back to forecast if empty.
+            # Velocity: prefer REAL 30d velocity (Orders API), fall back to
+            # forecast if empty. If real velocity is available, ALSO override
+            # fc_total with real_vel × window_days — otherwise an aspirational
+            # TT column in the Google Sheet inflates 'need' and steals boxes.
             tt_row  = tt_stock_map.get(dist_asin, {}) or {}
             stock   = int(tt_row.get("units") or 0)
             inbound = 0
             real_vel = float((tt_velocity_map.get(dist_asin) or {}).get("velocity_daily") or 0)
             if real_vel > 0:
                 vel = round(real_vel, 2)
+                fc_total = int(round(real_vel * 30 * len(months)))
             else:
                 vel = round(fc_total / (30 * len(months)), 2) if len(months) else 0.0
         else:
