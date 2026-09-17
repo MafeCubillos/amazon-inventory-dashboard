@@ -49,18 +49,22 @@ jobs:
 
       - name: Decide which email to send
         id: pick
-        # Cron picks by minute: :00 = inventory, :05 = reorder.
+        # Use the CRON EXPRESSION that triggered this run (not the current
+        # clock minute) — GitHub Actions cron jobs can be delayed 30+ min,
+        # so `date +%M` at runtime is unreliable. `github.event.schedule`
+        # is the exact cron string, e.g. "5 7 * * 1" for the reorder slot.
         # Manual dispatch honors the input.
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "kind=${{ github.event.inputs.email_kind }}" >> "$GITHUB_OUTPUT"
           else
-            MIN=$(date -u +%M)
-            if [ "$MIN" = "05" ]; then
-              echo "kind=reorder" >> "$GITHUB_OUTPUT"
-            else
-              echo "kind=inventory" >> "$GITHUB_OUTPUT"
-            fi
+            # A reorder cron starts with "5 7 " — anything else is inventory.
+            case "$SCHEDULE" in
+              "5 7 "*) echo "kind=reorder" >> "$GITHUB_OUTPUT" ;;
+              *)       echo "kind=inventory" >> "$GITHUB_OUTPUT" ;;
+            esac
           fi
 
       - name: Send inventory email
