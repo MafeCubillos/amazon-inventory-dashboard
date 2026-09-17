@@ -43,9 +43,11 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        # gspread + google-auth needed for the TikTok forecast fetch
-        # (the TT column in the Google Sheet feeds TikTok alerts + reorder needs)
-        run: pip install supabase python-dotenv gspread google-auth httpx
+        # supabase   - DB client
+        # gspread + google-auth - Google Sheets forecast fetch
+        # pandas     - forecast returns DataFrames (reorder loader walks them)
+        # httpx      - TikTok API (for tiktok_stock lookups)
+        run: pip install supabase python-dotenv gspread google-auth pandas httpx
 
       - name: Decide which email to send
         id: pick
