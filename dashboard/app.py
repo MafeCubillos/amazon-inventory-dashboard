@@ -3475,6 +3475,14 @@ def render_forecast_page(rows: list[dict]):
             stock   = c_inv.get("avail",   0)
             inbound = c_inv.get("inbound", 0)
             vel     = c_inv.get("vel",     0.0)
+            # Cap forecast at real-pace demand (30d velocity × window days).
+            # If an aspirational Google Sheet projects 1500 units but the
+            # market is actually selling 4/day (= 360 for 3 months), use the
+            # conservative 360 — otherwise inflated projections steal boxes
+            # from markets that genuinely need stock.
+            if vel > 0 and len(months):
+                real_demand = vel * 30 * len(months)
+                fc_total    = int(round(min(fc_total, real_demand)))
         need    = max(0, fc_total - stock - inbound)
         country_data[mp] = {
             "flag":    FLAGS_MAP[mp],
@@ -3521,12 +3529,25 @@ def render_forecast_page(rows: list[dict]):
             else:
                 sugg_boxes[mp] = _math.ceil(box_share)
 
-        # If ceiling pushed us over, trim from least-urgent country with boxes.
+        # Minimum boxes each country should keep to cover its forecast need.
+        # Used when trimming, so a country with real (forecast) need doesn't
+        # get cut to 0 just because its actual 30d velocity was low.
+        min_boxes = {
+            mp: _math.ceil(d["need"] / units_per_box) if d["need"] > 0 else 0
+            for mp, d in country_data.items()
+        }
+
+        # If ceiling pushed us over, trim least-urgent country — but PROTECT
+        # the min-need floor. Countries with need > 0 keep at least 1 box.
         while sum(sugg_boxes.values()) * units_per_box > available and available_boxes > 0:
-            candidates = [m for m in COUNTRIES if sugg_boxes[m] > 0]
-            if not candidates:
+            # Prefer trimming excess above the min-need floor
+            trimmable = [m for m in COUNTRIES if sugg_boxes[m] > min_boxes[m]]
+            if not trimmable:
+                # Everyone is at or below their min — must trim someone anyway
+                trimmable = [m for m in COUNTRIES if sugg_boxes[m] > 0]
+            if not trimmable:
                 break
-            least_urgent = max(candidates, key=lambda m: country_data[m]["days"])
+            least_urgent = max(trimmable, key=lambda m: country_data[m]["days"])
             sugg_boxes[least_urgent] -= 1
 
         st.session_state["dist_result"] = sugg_boxes
