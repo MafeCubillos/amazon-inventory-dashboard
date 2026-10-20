@@ -122,12 +122,49 @@ def _suggest_growth_from_history(months: dict[str, int]) -> float | None:
 
 # ── History extraction ────────────────────────────────────────────────────
 
-def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]]:
-    """Return {(asin, marketplace): {ym: units_sold_30d}} using the latest
-    snapshot per (asin, mp, year_month) from sales_velocity.
+def _monthly_history_from_sales_monthly() -> dict[tuple, dict[str, int]]:
+    """Preferred source: calendar-month aggregates stored in sales_monthly.
+    One row per (asin, marketplace, year_month) — accurate per-calendar-month
+    totals from SP-API's Sales & Traffic report.
+    """
+    history: dict[tuple, dict[str, int]] = defaultdict(dict)
+    try:
+        rows: list[dict] = []
+        page = 0
+        page_size = 1000
+        while True:
+            chunk = (
+                db_admin.table("sales_monthly")
+                .select("asin,marketplace,year_month,units")
+                .range(page * page_size, (page + 1) * page_size - 1)
+                .execute().data or []
+            )
+            rows.extend(chunk)
+            if len(chunk) < page_size:
+                break
+            page += 1
+            if page > 20:
+                break
+    except Exception as exc:
+        logger.warning("forecast_engine  sales_monthly read failed: %s", exc)
+        return history
 
-    Queries one month at a time so we don't hit the Supabase 1000-row cap
-    (daily snapshots pile up fast — a year of 4-market sync = ~1500 rows).
+    for r in rows:
+        mp = r["marketplace"]
+        if mp not in MARKETS:
+            continue
+        history[(r["asin"], mp)][r["year_month"]] = int(r.get("units") or 0)
+    return history
+
+
+def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]]:
+    """Return {(asin, marketplace): {ym: units_sold_30d}}.
+
+    Prefers sales_monthly (calendar-month aggregates). Falls back to the
+    latest sales_velocity snapshot per month for any (asin, mp, ym) that
+    sales_monthly doesn't cover yet.
+
+    Queries one month at a time to avoid the Supabase 1000-row cap.
     """
     import calendar as _cal
     from datetime import date as _date
@@ -144,7 +181,11 @@ def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]
             y -= 1
     months.reverse()
 
+    # Start from the accurate monthly aggregates; sales_velocity fills gaps
     history: dict[tuple, dict[str, int]] = defaultdict(dict)
+    for (k, mv) in _monthly_history_from_sales_monthly().items():
+        history[k] = dict(mv)   # copy so defaultdict stays usable
+
     for (yy, mm) in months:
         ym = f"{yy:04d}-{mm:02d}"
         first_day = f"{ym}-01"
@@ -175,9 +216,8 @@ def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]
             page += 1
             if page > 20:   # hard cap to prevent runaway (20k rows per month would be nuts)
                 break
-        # Within this month, keep the LATEST snapshot per (asin, mp).
-        # Rows are already date-desc ordered within each page; we also sort
-        # the merged list to be safe across page boundaries.
+        # Within this month, keep the LATEST snapshot per (asin, mp) — but
+        # DO NOT overwrite values we already got from sales_monthly (preferred).
         rows.sort(key=lambda r: r.get("period_end_date") or "", reverse=True)
         seen_in_month: set[tuple] = set()
         for r in rows:
@@ -189,7 +229,9 @@ def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]
             if key in seen_in_month:
                 continue
             seen_in_month.add(key)
-            history[(asin, mp)][ym] = int(r.get("units_sold_30d") or 0)
+            if ym in history.get(key, {}):
+                continue   # sales_monthly already has this one
+            history[key][ym] = int(r.get("units_sold_30d") or 0)
     return history
 
 

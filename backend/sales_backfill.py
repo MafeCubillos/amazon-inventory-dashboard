@@ -79,56 +79,56 @@ def _past_months(n: int = 12) -> list[tuple[int, int]]:
 
 
 def backfill_one_month(marketplace: str, year: int, month: int) -> tuple[int, str]:
-    """Pull one month of sales for one marketplace and upsert to sales_velocity.
+    """Pull one calendar month of sales for one marketplace from SP-API and
+    upsert to sales_monthly (CALENDAR-accurate — Oct 1 to Oct 31 totals).
     Returns (rows_written, status_msg).
     """
     start, end = _month_bounds(year, month)
-    period_end_label = end.isoformat()
+    ym = f"{year:04d}-{month:02d}"
     mp_enum = _MARKETPLACE_ENUM[marketplace]
     api = Reports(credentials=SP_API_CREDENTIALS, marketplace=mp_enum)
 
-    logger.info("backfill  %s  %04d-%02d  creating report (%s → %s)",
-                marketplace, year, month, start, end)
+    logger.info("backfill  %s  %s  creating report (%s → %s)",
+                marketplace, ym, start, end)
     try:
         report_id = _create_report(api, start, end)
         doc_id    = _poll_report(api, report_id)
         tsv_text  = _download_report(api, doc_id)
     except Exception as exc:
-        return 0, f"❌ {marketplace} {year}-{month:02d}: {exc}"
+        return 0, f"❌ {marketplace} {ym}: {exc}"
 
     df = _parse_and_aggregate(tsv_text, end)
     if df.empty:
-        return 0, f"⚠️ {marketplace} {year}-{month:02d}: 0 rows returned"
+        return 0, f"⚠️ {marketplace} {ym}: 0 rows returned"
 
     # Only ASINs known in products table (FK)
     known = {r["asin"] for r in db_admin.table("products").select("asin").execute().data or []}
-    days_in_month = (end - start).days + 1
 
     rows = []
     for _, r in df.iterrows():
         asin = r["asin"]
         if asin not in known:
             continue
-        units_month = int(r["units_sold_30d"])  # the report sums the whole window
+        units_month = int(r["units_sold_30d"])   # report sums the whole window → calendar month total
+        if units_month <= 0:
+            continue
         rows.append({
-            "asin":            asin,
-            "marketplace":     marketplace,
-            "units_sold_7d":   int(round(units_month * 7 / days_in_month)),
-            "units_sold_14d":  int(round(units_month * 14 / days_in_month)),
-            "units_sold_30d":  units_month,
-            "velocity_daily":  round(units_month / days_in_month, 4),
-            "period_end_date": period_end_label,
+            "asin":        asin,
+            "marketplace": marketplace,
+            "year_month":  ym,
+            "units":       units_month,
+            "source":      "sp_api",
         })
 
     if not rows:
-        return 0, f"⚠️ {marketplace} {year}-{month:02d}: no matching ASINs"
+        return 0, f"⚠️ {marketplace} {ym}: no matching ASINs"
 
     try:
-        count = upsert("sales_velocity", rows, "asin,marketplace,period_end_date")
+        count = upsert("sales_monthly", rows, "asin,marketplace,year_month")
     except Exception as exc:
-        return 0, f"❌ {marketplace} {year}-{month:02d}: upsert failed: {exc}"
+        return 0, f"❌ {marketplace} {ym}: upsert failed: {exc}"
 
-    return count, f"✅ {marketplace} {year}-{month:02d}: {count} rows"
+    return count, f"✅ {marketplace} {ym}: {count} rows"
 
 
 def backfill_all(months: int = 12) -> Iterator[dict]:
@@ -140,36 +140,28 @@ def backfill_all(months: int = 12) -> Iterator[dict]:
     period_list = _past_months(months)
     total = len(period_list) * len(MARKETS)
 
-    # Pre-check which (marketplace, exact-last-day-of-month) rows we already
-    # backfilled, so we skip them on reruns. Query each want_date individually
-    # (small, fast, dodges the default 1000-row cap, and we only have ~12).
-    want_dates = sorted({
-        _month_bounds(y, m)[1].isoformat() for (y, m) in period_list
-    })
+    # Pre-check which (marketplace, year_month) are already in sales_monthly.
+    # Match by year_month, so skip is clean and fast.
+    want_yms = sorted({f"{y:04d}-{m:02d}" for (y, m) in period_list})
     existing: set[tuple[str, str]] = set()
-    for d in want_dates:
-        try:
-            rows = (
-                db_admin.table("sales_velocity")
-                .select("marketplace")
-                .eq("period_end_date", d)
-                .execute().data or []
-            )
-            # If any row exists for this exact date, mark that (mp, date)
-            # as already present.
-            for r in rows:
-                existing.add((r["marketplace"], d))
-        except Exception:
-            continue
+    try:
+        rows = (
+            db_admin.table("sales_monthly")
+            .select("marketplace,year_month")
+            .in_("year_month", want_yms)
+            .execute().data or []
+        )
+        for r in rows:
+            existing.add((r["marketplace"], r["year_month"]))
+    except Exception:
+        pass
 
     done = 0
     for mp in MARKETS:
         for (y, m) in period_list:
             done += 1
             ym = f"{y:04d}-{m:02d}"
-            _, last = _month_bounds(y, m)
-            last_iso = last.isoformat()
-            if (mp, last_iso) in existing:
+            if (mp, ym) in existing:
                 yield {
                     "marketplace": mp, "year": y, "month": m,
                     "written": 0,
