@@ -2,6 +2,10 @@
 insert them into sales_velocity so the forecast engine has 12+ months of
 history to work with.
 
+RATE LIMITS (Amazon SP-API Reports): 0.0167 req/sec (= 1 per 60 sec), burst 15.
+We sleep 65s between report requests to stay well within limits. Reports that
+succeeded earlier are preserved (upsert is idempotent), so you can re-run.
+
 Uses the same GET_SALES_AND_TRAFFIC_REPORT as backend/fetchers/sales.py but
 loops through past months instead of pulling only the trailing 30 days.
 
@@ -28,8 +32,14 @@ from __future__ import annotations
 
 import calendar
 import logging
+import time
 from datetime import date, timedelta
 from typing import Iterator
+
+# Amazon SP-API Reports endpoint allows 1 create per 60s (0.0167 req/s).
+# In practice the burst quota is tighter than docs suggest, so we sleep 90s
+# to avoid repeated 429 QuotaExceeded errors.
+_SLEEP_BETWEEN_REPORTS_SEC = 90
 
 from sp_api.api import Reports
 from sp_api.base import Marketplaces
@@ -129,24 +139,68 @@ def backfill_all(months: int = 12) -> Iterator[dict]:
     """
     period_list = _past_months(months)
     total = len(period_list) * len(MARKETS)
+
+    # Pre-check which (marketplace, exact-last-day-of-month) rows we already
+    # backfilled, so we skip them on reruns. Query each want_date individually
+    # (small, fast, dodges the default 1000-row cap, and we only have ~12).
+    want_dates = sorted({
+        _month_bounds(y, m)[1].isoformat() for (y, m) in period_list
+    })
+    existing: set[tuple[str, str]] = set()
+    for d in want_dates:
+        try:
+            rows = (
+                db_admin.table("sales_velocity")
+                .select("marketplace")
+                .eq("period_end_date", d)
+                .execute().data or []
+            )
+            # If any row exists for this exact date, mark that (mp, date)
+            # as already present.
+            for r in rows:
+                existing.add((r["marketplace"], d))
+        except Exception:
+            continue
+
     done = 0
     for mp in MARKETS:
         for (y, m) in period_list:
-            n, msg = backfill_one_month(mp, y, m)
             done += 1
+            ym = f"{y:04d}-{m:02d}"
+            _, last = _month_bounds(y, m)
+            last_iso = last.isoformat()
+            if (mp, last_iso) in existing:
+                yield {
+                    "marketplace": mp, "year": y, "month": m,
+                    "written": 0,
+                    "msg": f"⏭️  {mp} {ym}: already in DB, skipped",
+                    "done": done, "total": total,
+                }
+                continue
+            n, msg = backfill_one_month(mp, y, m)
             yield {
                 "marketplace": mp, "year": y, "month": m,
                 "written": n, "msg": msg, "done": done, "total": total,
             }
+            # Respect SP-API Reports quota (1 create / 60s). Skip the sleep
+            # after the very last iteration so we don't dawdle on exit.
+            if done < total:
+                time.sleep(_SLEEP_BETWEEN_REPORTS_SEC)
 
 
 if __name__ == "__main__":
     import sys
+    # Auto-load .env so credentials are present when run as a script.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
     logging.basicConfig(level=logging.INFO)
     months = int(sys.argv[1]) if len(sys.argv) > 1 else 12
     total_written = 0
     for update in backfill_all(months):
-        print(f"[{update['done']}/{update['total']}] {update['msg']}")
+        print(f"[{update['done']}/{update['total']}] {update['msg']}", flush=True)
         total_written += update["written"]
     print(f"\n🎉 Backfill complete: {total_written} rows across "
           f"{months} months × {len(MARKETS)} markets")

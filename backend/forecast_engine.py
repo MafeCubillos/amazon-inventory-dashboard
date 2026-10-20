@@ -62,33 +62,58 @@ def _load_growth_settings() -> dict[str, float]:
 
 # ── History extraction ────────────────────────────────────────────────────
 
-def _monthly_history_amazon() -> dict[tuple, dict[str, int]]:
-    """Return {(asin, marketplace): {ym: units_sold_30d}} using latest snapshot
-    per (asin, mp, year_month) from sales_velocity.
+def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]]:
+    """Return {(asin, marketplace): {ym: units_sold_30d}} using the latest
+    snapshot per (asin, mp, year_month) from sales_velocity.
+
+    Queries one month at a time so we don't hit the Supabase 1000-row cap
+    (daily snapshots pile up fast — a year of 4-market sync = ~1500 rows).
     """
-    rows = (
-        db_admin.table("sales_velocity")
-        .select("asin,marketplace,units_sold_30d,period_end_date")
-        .order("period_end_date", desc=True)
-        .execute().data or []
-    )
-    # Keep LATEST snapshot per (asin, mp, year_month)
+    import calendar as _cal
+    from datetime import date as _date
+
+    today = _date.today()
+    # Build list of (year, month) for the last `months_back` months, oldest first
+    months: list[tuple[int, int]] = []
+    y, m = today.year, today.month
+    for _ in range(months_back + 1):   # include current month
+        months.append((y, m))
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    months.reverse()
+
     history: dict[tuple, dict[str, int]] = defaultdict(dict)
-    seen: dict[tuple, str] = {}
-    for r in rows:
-        asin = r["asin"]
-        mp   = r["marketplace"]
-        if mp not in MARKETS:
+    for (yy, mm) in months:
+        ym = f"{yy:04d}-{mm:02d}"
+        first_day = f"{ym}-01"
+        last_day_num = _cal.monthrange(yy, mm)[1]
+        last_day = f"{ym}-{last_day_num:02d}"
+        try:
+            rows = (
+                db_admin.table("sales_velocity")
+                .select("asin,marketplace,units_sold_30d,period_end_date")
+                .gte("period_end_date", first_day)
+                .lte("period_end_date", last_day)
+                .order("period_end_date", desc=True)
+                .execute().data or []
+            )
+        except Exception as exc:
+            logger.warning("forecast_engine  %s query failed: %s", ym, exc)
             continue
-        d = r.get("period_end_date") or ""
-        ym = d[:7]
-        if not ym:
-            continue
-        key = (asin, mp, ym)
-        if key in seen:
-            continue
-        seen[key] = d
-        history[(asin, mp)][ym] = int(r.get("units_sold_30d") or 0)
+        # Within this month, keep the LATEST snapshot per (asin, mp)
+        seen_in_month: set[tuple] = set()
+        for r in rows:
+            asin = r["asin"]
+            mp   = r["marketplace"]
+            if mp not in MARKETS:
+                continue
+            key = (asin, mp)
+            if key in seen_in_month:
+                continue
+            seen_in_month.add(key)
+            history[(asin, mp)][ym] = int(r.get("units_sold_30d") or 0)
     return history
 
 
