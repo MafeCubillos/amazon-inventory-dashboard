@@ -1,0 +1,45 @@
+name: Monthly Sales Backfill
+
+on:
+  schedule:
+    # Day 3 of each month at 06:00 UTC — picks up the previous month's totals
+    # once Amazon has settled late orders. Only 1 report per marketplace per
+    # run (4 total), well within SP-API quota.
+    - cron: '0 6 3 * *'
+  workflow_dispatch:
+    inputs:
+      months:
+        description: 'How many past months to try (default 1; set higher to backfill history)'
+        required: false
+        type: string
+        default: '1'
+
+jobs:
+  monthly-backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install supabase python-dotenv pandas python-amazon-sp-api tenacity httpx requests
+
+      - name: Backfill previous month(s) into sales_monthly
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          LWA_APP_ID:                ${{ secrets.LWA_APP_ID }}
+          LWA_CLIENT_SECRET:         ${{ secrets.LWA_CLIENT_SECRET }}
+          SP_API_REFRESH_TOKEN:      ${{ secrets.SP_API_REFRESH_TOKEN }}
+          AWS_ACCESS_KEY:            ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_KEY:            ${{ secrets.AWS_SECRET_KEY }}
+          AWS_ROLE_ARN:              ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          MONTHS="${{ github.event.inputs.months }}"
+          MONTHS="${MONTHS:-1}"
+          python -m backend.sales_backfill "$MONTHS"
