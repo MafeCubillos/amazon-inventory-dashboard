@@ -192,10 +192,17 @@ def _project(history_months: dict[str, int], growth_pct: float,
 # ── Public API ────────────────────────────────────────────────────────────
 
 def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
-    """Regenerate projections and upsert to forecast_computed.
-    If `asin` is given, only that product; otherwise all products with sales history.
+    """Regenerate projections AND cache historical aggregates in
+    forecast_computed. After this runs, the dashboard can read everything
+    (history + projections) from a single table instead of re-aggregating
+    sales_velocity on every page load.
 
-    Does NOT overwrite rows marked source='manual_override'.
+    Writes rows with:
+        source='history'  for aggregated past months
+        source='auto'     for projected future months
+    Does NOT overwrite source='manual_override' rows (user edits are kept).
+
+    If `asin` is given, only that product; otherwise all products.
     Returns (n_rows_written, warnings).
     """
     warnings: list[str] = []
@@ -211,7 +218,7 @@ def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
     if not history:
         return 0, ["No sales history found — sales_velocity / tiktok_velocity empty?"]
 
-    # Identify existing manual overrides to skip
+    # Protect user overrides across both history and future projections
     try:
         over_rows = (
             db_admin.table("forecast_computed")
@@ -228,16 +235,33 @@ def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
 
     for (a, mp), months in history.items():
         growth = settings.get(a, DEFAULT_GROW)
+
+        # 1) Cache historical months in forecast_computed with source='history'
+        for ym, units in months.items():
+            if (a, mp, ym) in overrides:
+                continue
+            to_upsert.append({
+                "asin":          a,
+                "marketplace":   mp,
+                "year_month":    ym,
+                "units":         int(units),
+                "growth_pct":    round(growth, 2),
+                "baseline_avg":  None,
+                "source":        "history",
+                "updated_at":    now_iso,
+            })
+
+        # 2) Project future months with source='auto'
         if len(months) < MIN_HISTORY:
-            warnings.append(f"{a} {mp}: only {len(months)} month(s) history, skipped")
+            warnings.append(f"{a} {mp}: only {len(months)} month(s) history, skipped projection")
             continue
         projections = _project(months, growth)
         if not projections:
-            warnings.append(f"{a} {mp}: baseline is zero, skipped")
+            warnings.append(f"{a} {mp}: baseline is zero, skipped projection")
             continue
         for ym, units, baseline in projections:
             if (a, mp, ym) in overrides:
-                continue   # don't trample a user override
+                continue
             to_upsert.append({
                 "asin":          a,
                 "marketplace":   mp,
@@ -252,7 +276,6 @@ def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
     if not to_upsert:
         return 0, (warnings or ["Nothing to write (all months already overridden?)"])
 
-    # Chunked upsert (Supabase has a payload size limit)
     written = 0
     for i in range(0, len(to_upsert), 500):
         chunk = to_upsert[i:i + 500]
@@ -269,33 +292,57 @@ def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
 
 
 def load_forecast_table(asin: str | None = None) -> dict:
-    """Convenience read for the dashboard — returns both history and
-    projections for inspection. Keyed by (asin, mp) → {history, projections, growth_pct}.
-    """
-    amz = _monthly_history_amazon()
-    tt  = _monthly_history_tiktok()
-    hist = {**amz, **tt}
-    if asin:
-        hist = {k: v for k, v in hist.items() if k[0] == asin}
+    """Fast read for the dashboard — pulls everything (history + projections)
+    from forecast_computed in a single query. This REPLACES the old flow of
+    re-aggregating sales_velocity on every page load.
 
+    Returns dict[(asin, mp)] → {history, projections, growth_pct}.
+    """
     settings = _load_growth_settings()
 
     try:
-        fc_rows = db_admin.table("forecast_computed").select("*").execute().data or []
-    except Exception:
-        fc_rows = []
-    fc_by_key: dict[tuple, dict[str, dict]] = defaultdict(dict)
-    for r in fc_rows:
-        if asin and r["asin"] != asin:
-            continue
-        fc_by_key[(r["asin"], r["marketplace"])][r["year_month"]] = r
+        q = db_admin.table("forecast_computed").select("*")
+        if asin:
+            q = q.eq("asin", asin)
+        # Paginate to be safe (12 months × 15 ASINs × 5 markets = 900 rows,
+        # but it will grow as we add more products).
+        rows: list[dict] = []
+        page = 0
+        page_size = 1000
+        while True:
+            chunk = q.range(page * page_size, (page + 1) * page_size - 1).execute().data or []
+            rows.extend(chunk)
+            if len(chunk) < page_size:
+                break
+            page += 1
+            if page > 10:
+                break
+    except Exception as exc:
+        logger.warning("forecast_engine  load failed: %s", exc)
+        rows = []
 
-    out = {}
-    for key in hist:
+    hist_by_key: dict[tuple, dict[str, int]] = defaultdict(dict)
+    proj_by_key: dict[tuple, dict[str, dict]] = defaultdict(dict)
+    asins_seen: set[str] = set()
+    for r in rows:
+        a  = r["asin"]
+        mp = r["marketplace"]
+        ym = r["year_month"]
+        src = r.get("source", "auto")
+        asins_seen.add(a)
+        if src == "history":
+            hist_by_key[(a, mp)][ym] = int(r.get("units") or 0)
+        else:
+            # 'auto' or 'manual_override' both count as projections
+            proj_by_key[(a, mp)][ym] = r
+
+    out: dict[tuple, dict] = {}
+    all_keys = set(hist_by_key.keys()) | set(proj_by_key.keys())
+    for key in all_keys:
         a, mp = key
         out[key] = {
-            "history":     dict(sorted(hist[key].items())),
-            "projections": fc_by_key.get(key, {}),
+            "history":     dict(sorted(hist_by_key.get(key, {}).items())),
+            "projections": proj_by_key.get(key, {}),
             "growth_pct":  settings.get(a, DEFAULT_GROW),
         }
     return out

@@ -3685,6 +3685,7 @@ def render_forecast_builder_page(rows: list[dict]):
                     st.warning("No rows written — see warnings")
                 for w in warns[:10]:
                     st.info(w)
+                st.session_state["_fb_cache_bust"] = True
                 st.rerun()
     with cB:
         if st.button("📥 Backfill 12M desde Amazon", key="fb_backfill_btn",
@@ -3772,10 +3773,20 @@ def render_forecast_builder_page(rows: list[dict]):
                 st.success(f"✅ {n} rows actualizadas")
                 for w in warns[:5]:
                     st.info(w)
+                st.session_state["_fb_cache_bust"] = True
                 st.rerun()
 
     # ── Table: history + projections ───────────────────────────
-    data = load_forecast_table(asin=sel_asin)
+    # Cached: forecast_computed is only mutated by Regenerate, so a short
+    # TTL keeps the page snappy without staleness risk. Clear on regenerate.
+    @st.cache_data(ttl=180, show_spinner=False)
+    def _fb_cached_load(asin: str) -> dict:
+        return load_forecast_table(asin=asin)
+
+    # If a regenerate just ran, force a fresh pull
+    if st.session_state.pop("_fb_cache_bust", False):
+        _fb_cached_load.clear()
+    data = _fb_cached_load(sel_asin)
     if not data:
         st.warning("Sin historial de ventas para este ASIN todavía. "
                    "Espera a que sales_velocity acumule datos, o pulsa Regenerate.")
