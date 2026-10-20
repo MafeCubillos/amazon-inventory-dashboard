@@ -50,14 +50,74 @@ def _next_ym(year: int, month: int, offset: int) -> str:
     return f"{y:04d}-{m:02d}"
 
 
-def _load_growth_settings() -> dict[str, float]:
-    """Per-ASIN growth %; falls back to DEFAULT_GROW when missing."""
+def _load_growth_settings() -> dict[tuple[str, str], float]:
+    """Per-(asin, marketplace) growth %. The special marketplace 'ALL' is the
+    product-level fallback (used if no per-country override exists).
+    """
     try:
-        rows = db_admin.table("forecast_settings").select("asin,growth_pct").execute().data or []
-        return {r["asin"]: float(r["growth_pct"]) for r in rows if r.get("growth_pct") is not None}
+        rows = db_admin.table("forecast_settings").select(
+            "asin,marketplace,growth_pct"
+        ).execute().data or []
+        out = {}
+        for r in rows:
+            if r.get("growth_pct") is None:
+                continue
+            mp = r.get("marketplace") or "ALL"
+            out[(r["asin"], mp)] = float(r["growth_pct"])
+        return out
     except Exception as exc:
         logger.warning("forecast_engine  settings load failed: %s", exc)
         return {}
+
+
+def _resolve_growth(
+    settings: dict[tuple[str, str], float],
+    asin: str,
+    marketplace: str,
+) -> float:
+    """Resolve the growth % for (asin, marketplace), falling back to:
+       (asin, 'ALL') → product-wide default → DEFAULT_GROW.
+    """
+    if (asin, marketplace) in settings:
+        return settings[(asin, marketplace)]
+    if (asin, "ALL") in settings:
+        return settings[(asin, "ALL")]
+    return DEFAULT_GROW
+
+
+def _suggest_growth_from_history(months: dict[str, int]) -> float | None:
+    """Compute a data-driven growth suggestion as the geometric mean of
+    month-over-month ratios in the last 6 months (ignoring zeros).
+
+    Returns a percent (e.g. 5.0 = 5% monthly growth). None if not enough data
+    or if numbers are too volatile to be meaningful.
+    """
+    if not months or len(months) < 3:
+        return None
+    sorted_ym = sorted(months.keys())
+    series = [months[ym] for ym in sorted_ym[-6:]]
+    # Drop the most recent partial month if it looks much smaller than the
+    # trailing — common when today is mid-month and only part of sales is in.
+    if len(series) >= 2 and series[-1] < 0.5 * (sum(series[:-1]) / len(series[:-1])):
+        series = series[:-1]
+    if len(series) < 2:
+        return None
+    # Month-over-month ratios; skip pairs where previous is 0
+    ratios: list[float] = []
+    for a, b in zip(series[:-1], series[1:]):
+        if a <= 0:
+            continue
+        ratios.append(b / a)
+    if not ratios:
+        return None
+    # Geometric mean of ratios → average monthly growth factor
+    product = 1.0
+    for r in ratios:
+        product *= r
+    gm = product ** (1.0 / len(ratios))
+    pct = (gm - 1.0) * 100.0
+    # Clamp to a sane range so a single outlier doesn't produce 400%/mo
+    return max(-30.0, min(50.0, round(pct, 1)))
 
 
 # ── History extraction ────────────────────────────────────────────────────
@@ -234,7 +294,13 @@ def regenerate_forecast(asin: str | None = None) -> tuple[int, list[str]]:
     to_upsert: list[dict] = []
 
     for (a, mp), months in history.items():
-        growth = settings.get(a, DEFAULT_GROW)
+        # Resolve growth: per-country override → product-wide → auto-suggest → default
+        growth = _resolve_growth(settings, a, mp)
+        if (a, mp) not in settings and (a, "ALL") not in settings:
+            # No manual setting at any level — try the data-driven suggestion
+            suggested = _suggest_growth_from_history(months)
+            if suggested is not None:
+                growth = suggested
 
         # 1) Cache historical months in forecast_computed with source='history'
         for ym, units in months.items():
@@ -340,10 +406,30 @@ def load_forecast_table(asin: str | None = None) -> dict:
     all_keys = set(hist_by_key.keys()) | set(proj_by_key.keys())
     for key in all_keys:
         a, mp = key
+        hist = dict(sorted(hist_by_key.get(key, {}).items()))
+        growth_manual = settings.get((a, mp))   # per-country override
+        growth_prod   = settings.get((a, "ALL"))  # product-wide override
+        growth_suggested = _suggest_growth_from_history(hist)
+        if growth_manual is not None:
+            growth_used = growth_manual
+            growth_src = "manual_country"
+        elif growth_prod is not None:
+            growth_used = growth_prod
+            growth_src = "manual_product"
+        elif growth_suggested is not None:
+            growth_used = growth_suggested
+            growth_src = "auto"
+        else:
+            growth_used = DEFAULT_GROW
+            growth_src = "default"
         out[key] = {
-            "history":     dict(sorted(hist_by_key.get(key, {}).items())),
-            "projections": proj_by_key.get(key, {}),
-            "growth_pct":  settings.get(a, DEFAULT_GROW),
+            "history":          hist,
+            "projections":      proj_by_key.get(key, {}),
+            "growth_pct":       growth_used,
+            "growth_source":    growth_src,
+            "growth_suggested": growth_suggested,
+            "growth_manual":    growth_manual,
+            "growth_product":   growth_prod,
         }
     return out
 

@@ -3738,35 +3738,11 @@ def render_forecast_builder_page(rows: list[dict]):
     if not sel_asin:
         return
 
-    # Load growth setting
     from backend.database import db_admin
-    try:
-        gs = db_admin.table("forecast_settings").select("*").eq("asin", sel_asin).execute().data or []
-        cur_growth = float(gs[0]["growth_pct"]) if gs else DEFAULT_GROW
-    except Exception:
-        cur_growth = DEFAULT_GROW
 
-    # Growth % input
-    c1, c2, c3 = st.columns([2, 2, 2])
-    with c1:
-        new_growth = st.number_input(
-            "📈 Growth % mes a mes",
-            min_value=-50.0, max_value=100.0, value=float(cur_growth), step=1.0,
-            key=f"fb_growth_{sel_asin}",
-            help="Crecimiento esperado mes vs mes. Ej: 5 = 5% más que el mes anterior.",
-        )
-    with c2:
-        if st.button("💾 Guardar growth %", key=f"fb_save_growth_{sel_asin}"):
-            try:
-                db_admin.table("forecast_settings").upsert({
-                    "asin": sel_asin,
-                    "growth_pct": round(new_growth, 2),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }, on_conflict="asin").execute()
-                st.success("Guardado")
-            except Exception as exc:
-                st.error(f"Falló: {exc}")
-    with c3:
+    # Regenerate button (per product)
+    cR, cR2 = st.columns([1, 3])
+    with cR:
         if st.button("🔄 Regenerate este producto", key=f"fb_regen_{sel_asin}"):
             with st.spinner("Recalculando…"):
                 n, warns = regenerate_forecast(asin=sel_asin)
@@ -3775,6 +3751,8 @@ def render_forecast_builder_page(rows: list[dict]):
                     st.info(w)
                 st.session_state["_fb_cache_bust"] = True
                 st.rerun()
+    with cR2:
+        st.caption("Pulsa aquí después de editar los growth % por país.")
 
     # ── Table: history + projections ───────────────────────────
     # Cached: forecast_computed is only mutated by Regenerate, so a short
@@ -3791,6 +3769,69 @@ def render_forecast_builder_page(rows: list[dict]):
         st.warning("Sin historial de ventas para este ASIN todavía. "
                    "Espera a que sales_velocity acumule datos, o pulsa Regenerate.")
         return
+
+    # ── Growth % per country ───────────────────────────────────
+    st.markdown("##### 📈 Growth % mes a mes por país")
+    st.caption("Sugerido automáticamente desde el histórico. Edita cualquiera si "
+               "esperas comportamiento distinto (promo, lanzamiento). Después pulsa "
+               "**🔄 Regenerate este producto** para que las proyecciones usen los nuevos growth.")
+    growth_cols = st.columns(len(MARKETS) + 1)
+    new_growths: dict[str, float] = {}
+    for i, mp in enumerate(MARKETS + ["TT"]):
+        key = (sel_asin, mp)
+        payload = data.get(key)
+        if not payload:
+            with growth_cols[i]:
+                st.markdown(f"**{mp}**")
+                st.caption("sin ventas")
+            continue
+        suggested = payload.get("growth_suggested")
+        current   = payload.get("growth_pct", 5.0)
+        src       = payload.get("growth_source", "default")
+        src_badge = {
+            "manual_country": "🖐 Manual país",
+            "manual_product": "🖐 Manual producto",
+            "auto":           "🤖 Auto",
+            "default":        "⚙️ Default 5%",
+        }.get(src, src)
+        with growth_cols[i]:
+            st.markdown(f"**{mp}**")
+            v = st.number_input(
+                "growth %", value=float(current), step=1.0,
+                min_value=-50.0, max_value=100.0,
+                key=f"fb_g_{sel_asin}_{mp}",
+                label_visibility="collapsed",
+                format="%.1f",
+            )
+            new_growths[mp] = v
+            tip = f"{src_badge}"
+            if suggested is not None and src != "auto":
+                tip += f" · sugerido: {suggested:+.1f}%"
+            st.caption(tip)
+
+    cS1, cS2 = st.columns([1, 3])
+    with cS1:
+        if st.button("💾 Guardar growth por país", key=f"fb_save_growths_{sel_asin}"):
+            saved = 0
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for mp, v in new_growths.items():
+                try:
+                    db_admin.table("forecast_settings").upsert({
+                        "asin":        sel_asin,
+                        "marketplace": mp,
+                        "growth_pct":  round(float(v), 2),
+                        "updated_at":  now_iso,
+                    }, on_conflict="asin,marketplace").execute()
+                    saved += 1
+                except Exception as exc:
+                    st.error(f"{mp}: {exc}")
+            if saved:
+                st.success(f"✅ Guardados {saved} growth settings. "
+                           "Pulsa **🔄 Regenerate este producto** para refrescar proyecciones.")
+    with cS2:
+        st.caption("Nota: Guardar no re-calcula las proyecciones — para eso pulsa Regenerate.")
+
+    st.divider()
 
     # Build unified table: rows=countries, cols=months (hist + proj)
     today = _date.today()
@@ -3843,7 +3884,7 @@ def render_forecast_builder_page(rows: list[dict]):
 <div style="display:flex;gap:14px;margin:12px 0;font-size:12px">
   <div><span style="background:#F0F0F0;padding:3px 8px;border-radius:4px;color:#666">⬅️ Historial real</span></div>
   <div><span style="background:#EAF3DE;padding:3px 8px;border-radius:4px;color:#3B6D11">➡️ Proyección (auto)</span></div>
-  <div style="color:#888">Growth actual: <b>{new_growth:.1f}%</b> · Mes actual: <b>{cur_ym}</b></div>
+  <div style="color:#888">Mes actual: <b>{cur_ym}</b></div>
 </div>""",
         unsafe_allow_html=True,
     )
