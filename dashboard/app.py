@@ -3674,7 +3674,7 @@ def render_forecast_builder_page(rows: list[dict]):
     asin_name = {r["asin"]: r["name"] for r in rows}
 
     # ── Regenerate button + global info ────────────────────────
-    cA, cB = st.columns([1, 3])
+    cA, cB, cC = st.columns([1, 1, 2])
     with cA:
         if st.button("🔄 Regenerate all", type="primary", key="fb_regen_all"):
             with st.spinner("Computing projections…"):
@@ -3687,8 +3687,38 @@ def render_forecast_builder_page(rows: list[dict]):
                     st.info(w)
                 st.rerun()
     with cB:
-        st.caption("Pulsa **Regenerate all** cada mes cuando entre data nueva, "
-                   "o cuando ajustes growth%. **Overrides manuales se preservan.**")
+        if st.button("📥 Backfill 12M desde Amazon", key="fb_backfill_btn",
+                     help="Jala últimos 12 meses de ventas vía SP-API y los "
+                          "inserta en sales_velocity. Tarda ~2 horas (48 reports). "
+                          "Córrelo UNA sola vez."):
+            st.session_state["_bf_running"] = True
+    with cC:
+        st.caption("**Regenerate all** = recalcula proyecciones con el historial actual. "
+                   "**Backfill 12M** = jala 12 meses de ventas pasadas desde Amazon "
+                   "(hazlo UNA vez para tener baseline sólido).")
+
+    # ── Backfill execution ─────────────────────────────────────
+    if st.session_state.get("_bf_running"):
+        from backend.sales_backfill import backfill_all
+        st.warning("⏳ Backfill en progreso — NO cierres esta pestaña. "
+                   "Cada mes × país tarda 2-5 min (reports asíncronos de Amazon).")
+        progress  = st.progress(0.0, text="Starting…")
+        log_area  = st.empty()
+        log_lines: list[str] = []
+        total_rows = 0
+        try:
+            for upd in backfill_all(months=12):
+                total_rows += upd["written"]
+                progress.progress(upd["done"] / upd["total"],
+                                  text=f"{upd['done']}/{upd['total']} · {upd['msg']}")
+                log_lines.append(upd["msg"])
+                log_area.code("\n".join(log_lines[-20:]), language="text")
+            st.success(f"🎉 Backfill completo: {total_rows} rows insertadas. "
+                       "Ahora pulsa **🔄 Regenerate all** para refrescar las proyecciones.")
+        except Exception as exc:
+            st.error(f"Backfill falló: {exc}")
+        finally:
+            st.session_state["_bf_running"] = False
 
     st.divider()
 
