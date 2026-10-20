@@ -90,19 +90,35 @@ def _monthly_history_amazon(months_back: int = 12) -> dict[tuple, dict[str, int]
         first_day = f"{ym}-01"
         last_day_num = _cal.monthrange(yy, mm)[1]
         last_day = f"{ym}-{last_day_num:02d}"
-        try:
-            rows = (
-                db_admin.table("sales_velocity")
-                .select("asin,marketplace,units_sold_30d,period_end_date")
-                .gte("period_end_date", first_day)
-                .lte("period_end_date", last_day)
-                .order("period_end_date", desc=True)
-                .execute().data or []
-            )
-        except Exception as exc:
-            logger.warning("forecast_engine  %s query failed: %s", ym, exc)
-            continue
-        # Within this month, keep the LATEST snapshot per (asin, mp)
+        # Paginate: a busy month (30 days × 4 markets × many ASINs) easily
+        # exceeds Supabase's default 1000-row response cap.
+        page = 0
+        page_size = 1000
+        rows: list[dict] = []
+        while True:
+            try:
+                chunk = (
+                    db_admin.table("sales_velocity")
+                    .select("asin,marketplace,units_sold_30d,period_end_date")
+                    .gte("period_end_date", first_day)
+                    .lte("period_end_date", last_day)
+                    .order("period_end_date", desc=True)
+                    .range(page * page_size, (page + 1) * page_size - 1)
+                    .execute().data or []
+                )
+            except Exception as exc:
+                logger.warning("forecast_engine  %s page %d failed: %s", ym, page, exc)
+                break
+            rows.extend(chunk)
+            if len(chunk) < page_size:
+                break
+            page += 1
+            if page > 20:   # hard cap to prevent runaway (20k rows per month would be nuts)
+                break
+        # Within this month, keep the LATEST snapshot per (asin, mp).
+        # Rows are already date-desc ordered within each page; we also sort
+        # the merged list to be safe across page boundaries.
+        rows.sort(key=lambda r: r.get("period_end_date") or "", reverse=True)
         seen_in_month: set[tuple] = set()
         for r in rows:
             asin = r["asin"]
