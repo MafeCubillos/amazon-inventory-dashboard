@@ -3092,12 +3092,68 @@ def render_edit_panel(rows: list[dict]):
 # ══════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_forecast() -> dict:
+def _load_forecast_from_computed() -> dict:
+    """Load forecast from forecast_computed (new auto-forecast). Returns a dict
+    in the same shape as the Google Sheet fetcher: {asin: {"data": DataFrame}}.
+    Each DataFrame is indexed by YYYY-MM, columns = marketplaces (ES/FR/DE/IT/TT).
+    Only history + future rows (NOT TikTok at this layer — TT is handled
+    separately by the planner via tiktok_velocity).
+    """
+    import pandas as pd
+    try:
+        from backend.database import db_admin
+        from collections import defaultdict
+        rows: list[dict] = []
+        page = 0
+        page_size = 1000
+        while True:
+            chunk = (
+                db_admin.table("forecast_computed")
+                .select("asin,marketplace,year_month,units")
+                .range(page * page_size, (page + 1) * page_size - 1)
+                .execute().data or []
+            )
+            rows.extend(chunk)
+            if len(chunk) < page_size:
+                break
+            page += 1
+            if page > 20:
+                break
+        # Pivot: asin → DataFrame[year_month, marketplace] = units
+        per_asin: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(dict))
+        for r in rows:
+            per_asin[r["asin"]][r["year_month"]][r["marketplace"]] = int(r.get("units") or 0)
+        out: dict = {}
+        for asin, by_ym in per_asin.items():
+            yms = sorted(by_ym.keys())
+            mps = sorted({mp for ym_row in by_ym.values() for mp in ym_row.keys()})
+            data = [[by_ym[ym].get(mp, 0) for mp in mps] for ym in yms]
+            df = pd.DataFrame(data, index=yms, columns=mps)
+            out[asin] = {"data": df}
+        return out
+    except Exception as e:
+        return {"_error": str(e)}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_forecast_from_sheet() -> dict:
+    """Legacy Google Sheet forecast — kept as a fallback."""
     try:
         from backend.fetchers.forecast import fetch_forecast
         return fetch_forecast()
     except Exception as e:
         return {"_error": str(e)}
+
+
+def load_forecast() -> dict:
+    """Prefer the new auto-forecast (forecast_computed) over the Google Sheet.
+    Falls back to the sheet only if forecast_computed is empty or errored."""
+    computed = _load_forecast_from_computed()
+    # If forecast_computed has data for any ASIN, use it (strip _error key)
+    real_asins = {k: v for k, v in computed.items() if not k.startswith("_")}
+    if real_asins:
+        return real_asins
+    return _load_forecast_from_sheet()
 
 
 def render_forecast_page(rows: list[dict]):
