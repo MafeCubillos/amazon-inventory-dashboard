@@ -902,6 +902,7 @@ def render_sidebar():
                      ("🏠", "Local Stock",    "local"),
                      ("🎵", "TikTok",         "tiktok"),
                      ("📈", "Forecast",       "forecast"),
+                     ("📊", "Forecast Builder", "forecast_builder"),
                      ("⚙️", "Settings",       "settings")]
 
         for icon, label, key in nav_items:
@@ -3654,6 +3655,189 @@ def render_forecast_page(rows: list[dict]):
 
 
 # ══════════════════════════════════════════════════════════════
+# FORECAST BUILDER (auto-generated projections from real sales)
+# ══════════════════════════════════════════════════════════════
+
+def render_forecast_builder_page(rows: list[dict]):
+    st.markdown("#### 📊 Forecast Builder")
+    st.caption(
+        "Proyecciones automáticas basadas en ventas reales (sales_velocity + "
+        "tiktok_velocity). **Modelo**: promedio últimos 3 meses × (1 + growth%)^N "
+        "por 12 meses hacia adelante. Growth% editable por producto."
+    )
+
+    from backend.forecast_engine import (
+        regenerate_forecast, load_forecast_table, DEFAULT_GROW, MARKETS,
+    )
+    from datetime import date as _date
+
+    asin_name = {r["asin"]: r["name"] for r in rows}
+
+    # ── Regenerate button + global info ────────────────────────
+    cA, cB = st.columns([1, 3])
+    with cA:
+        if st.button("🔄 Regenerate all", type="primary", key="fb_regen_all"):
+            with st.spinner("Computing projections…"):
+                n, warns = regenerate_forecast()
+                if n > 0:
+                    st.success(f"✅ Wrote {n} rows across all ASINs")
+                else:
+                    st.warning("No rows written — see warnings")
+                for w in warns[:10]:
+                    st.info(w)
+                st.rerun()
+    with cB:
+        st.caption("Pulsa **Regenerate all** cada mes cuando entre data nueva, "
+                   "o cuando ajustes growth%. **Overrides manuales se preservan.**")
+
+    st.divider()
+
+    # ── Per-product view ───────────────────────────────────────
+    if not rows:
+        st.info("No products loaded yet.")
+        return
+
+    asin_opts = [(r["asin"], f"{r['asin']} · {r['name'][:50]}") for r in rows]
+    sel_label = st.selectbox(
+        "Producto",
+        options=[lbl for _, lbl in asin_opts],
+        key="fb_asin_select",
+    )
+    sel_asin = next((a for a, lbl in asin_opts if lbl == sel_label), None)
+    if not sel_asin:
+        return
+
+    # Load growth setting
+    from backend.database import db_admin
+    try:
+        gs = db_admin.table("forecast_settings").select("*").eq("asin", sel_asin).execute().data or []
+        cur_growth = float(gs[0]["growth_pct"]) if gs else DEFAULT_GROW
+    except Exception:
+        cur_growth = DEFAULT_GROW
+
+    # Growth % input
+    c1, c2, c3 = st.columns([2, 2, 2])
+    with c1:
+        new_growth = st.number_input(
+            "📈 Growth % mes a mes",
+            min_value=-50.0, max_value=100.0, value=float(cur_growth), step=1.0,
+            key=f"fb_growth_{sel_asin}",
+            help="Crecimiento esperado mes vs mes. Ej: 5 = 5% más que el mes anterior.",
+        )
+    with c2:
+        if st.button("💾 Guardar growth %", key=f"fb_save_growth_{sel_asin}"):
+            try:
+                db_admin.table("forecast_settings").upsert({
+                    "asin": sel_asin,
+                    "growth_pct": round(new_growth, 2),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, on_conflict="asin").execute()
+                st.success("Guardado")
+            except Exception as exc:
+                st.error(f"Falló: {exc}")
+    with c3:
+        if st.button("🔄 Regenerate este producto", key=f"fb_regen_{sel_asin}"):
+            with st.spinner("Recalculando…"):
+                n, warns = regenerate_forecast(asin=sel_asin)
+                st.success(f"✅ {n} rows actualizadas")
+                for w in warns[:5]:
+                    st.info(w)
+                st.rerun()
+
+    # ── Table: history + projections ───────────────────────────
+    data = load_forecast_table(asin=sel_asin)
+    if not data:
+        st.warning("Sin historial de ventas para este ASIN todavía. "
+                   "Espera a que sales_velocity acumule datos, o pulsa Regenerate.")
+        return
+
+    # Build unified table: rows=countries, cols=months (hist + proj)
+    today = _date.today()
+    cur_ym = today.strftime("%Y-%m")
+
+    # Collect all months across all markets for consistent columns
+    all_months = set()
+    for (_, _), payload in data.items():
+        all_months.update(payload["history"].keys())
+        all_months.update(payload["projections"].keys())
+    all_months = sorted(all_months)
+
+    # Only show last 6 months of history and next 12 months
+    past_months = [m for m in all_months if m < cur_ym][-6:]
+    future_months = [m for m in all_months if m >= cur_ym][:12]
+    show_months = past_months + future_months
+
+    rows_view = []
+    for mp in MARKETS + ["TT"]:
+        key = (sel_asin, mp)
+        if key not in data:
+            continue
+        payload = data[key]
+        row = {"País": mp}
+        for ym in show_months:
+            if ym in payload["history"]:
+                row[ym] = payload["history"][ym]
+            elif ym in payload["projections"]:
+                row[ym] = payload["projections"][ym]["units"]
+            else:
+                row[ym] = None
+        rows_view.append(row)
+
+    if not rows_view:
+        st.info("No hay datos para este ASIN en ningún mercado.")
+        return
+
+    import pandas as pd
+    df = pd.DataFrame(rows_view)
+
+    # Totals row (sum across countries per month)
+    total_row = {"País": "**TOTAL**"}
+    for ym in show_months:
+        total_row[ym] = int(sum(r[ym] for r in rows_view if r[ym] is not None))
+    df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+
+    # Legend
+    st.markdown(
+        f"""
+<div style="display:flex;gap:14px;margin:12px 0;font-size:12px">
+  <div><span style="background:#F0F0F0;padding:3px 8px;border-radius:4px;color:#666">⬅️ Historial real</span></div>
+  <div><span style="background:#EAF3DE;padding:3px 8px;border-radius:4px;color:#3B6D11">➡️ Proyección (auto)</span></div>
+  <div style="color:#888">Growth actual: <b>{new_growth:.1f}%</b> · Mes actual: <b>{cur_ym}</b></div>
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    # Column config: future months highlighted
+    col_cfg = {"País": st.column_config.TextColumn("País", width="small")}
+    for ym in show_months:
+        is_future = ym >= cur_ym
+        label = ("📊 " if is_future else "") + ym
+        col_cfg[ym] = st.column_config.NumberColumn(
+            label, format="%d",
+            help=("Proyección automática" if is_future else "Ventas reales"),
+        )
+
+    st.dataframe(df, column_config=col_cfg, hide_index=True, use_container_width=True)
+
+    # ── Summary metrics ────────────────────────────────────────
+    hist_total  = sum(sum(payload["history"].values()) for payload in data.values())
+    proj_total  = sum(sum(p["units"] for p in payload["projections"].values()) for payload in data.values())
+    n_months_hist = len(set().union(*(p["history"].keys() for p in data.values())))
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Historial total (todos los meses)", f"{hist_total:,} unidades")
+    with m2:
+        st.metric(f"Meses de historial", f"{n_months_hist}")
+    with m3:
+        st.metric("Proyectado próximos 12 meses", f"{proj_total:,} unidades")
+
+    st.caption("💡 **Para editar manualmente** un valor proyectado (ej. te esperas una campaña de Black Friday): "
+               "edita directamente en Supabase la tabla `forecast_computed`, cambiando `source` a `manual_override`. "
+               "Esas filas no se sobreescriben al regenerar.")
+
+
+# ══════════════════════════════════════════════════════════════
 # SETTINGS TAB
 # ══════════════════════════════════════════════════════════════
 
@@ -4320,6 +4504,10 @@ elif page == "tiktok":
 # ════════ PAGE: FORECAST ════════
 elif page == "forecast":
     render_forecast_page(rows)
+
+# ════════ PAGE: FORECAST BUILDER (auto projections) ════════
+elif page == "forecast_builder":
+    render_forecast_builder_page(rows)
 
 # ════════ PAGE: SETTINGS ════════
 elif page == "settings":
