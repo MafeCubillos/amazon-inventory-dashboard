@@ -104,21 +104,29 @@ def backfill_one_month(marketplace: str, year: int, month: int) -> tuple[int, st
     # Only ASINs known in products table (FK)
     known = {r["asin"] for r in db_admin.table("products").select("asin").execute().data or []}
 
-    rows = []
+    # Deduplicate: Amazon can return multiple report lines for the same ASIN
+    # (parent + child variants). Sum them so upsert doesn't choke on duplicate
+    # (asin, mp, ym) keys.
+    units_by_asin: dict[str, int] = {}
     for _, r in df.iterrows():
         asin = r["asin"]
         if asin not in known:
             continue
-        units_month = int(r["units_sold_30d"])   # report sums the whole window → calendar month total
+        units_month = int(r["units_sold_30d"])
         if units_month <= 0:
             continue
-        rows.append({
+        units_by_asin[asin] = units_by_asin.get(asin, 0) + units_month
+
+    rows = [
+        {
             "asin":        asin,
             "marketplace": marketplace,
             "year_month":  ym,
-            "units":       units_month,
+            "units":       units,
             "source":      "sp_api",
-        })
+        }
+        for asin, units in units_by_asin.items()
+    ]
 
     if not rows:
         return 0, f"⚠️ {marketplace} {ym}: no matching ASINs"
