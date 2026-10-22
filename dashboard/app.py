@@ -3123,13 +3123,21 @@ def _load_forecast_from_computed() -> dict:
         per_asin: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(dict))
         for r in rows:
             per_asin[r["asin"]][r["year_month"]][r["marketplace"]] = int(r.get("units") or 0)
+
+        # Pull product names so the Forecast viewer page can label dropdowns
+        try:
+            name_rows = db_admin.table("products").select("asin,product_name").execute().data or []
+            names = {r["asin"]: (r.get("product_name") or r["asin"]) for r in name_rows}
+        except Exception:
+            names = {}
+
         out: dict = {}
         for asin, by_ym in per_asin.items():
             yms = sorted(by_ym.keys())
             mps = sorted({mp for ym_row in by_ym.values() for mp in ym_row.keys()})
             data = [[by_ym[ym].get(mp, 0) for mp in mps] for ym in yms]
             df = pd.DataFrame(data, index=yms, columns=mps)
-            out[asin] = {"data": df}
+            out[asin] = {"data": df, "name": names.get(asin, asin)}
         return out
     except Exception as e:
         return {"_error": str(e)}
