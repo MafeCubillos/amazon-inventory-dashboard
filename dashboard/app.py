@@ -3594,6 +3594,23 @@ def render_forecast_page(rows: list[dict]):
             else:
                 sugg_boxes[mp] = _math.ceil(box_share)
 
+        # Rescue case: available boxes exist AND someone needs stock, but the
+        # "< 0.5 box share" rule zeroed everyone (common with 1 box ÷ 4 countries).
+        # Fill boxes one by one into the highest-weight country until we hit
+        # the budget, so a 1-box PO at least goes to the most urgent market.
+        if available_boxes > 0 and sum(sugg_boxes.values()) == 0:
+            ranked = sorted(
+                [m for m in COUNTRIES if weights.get(m, 0) > 0],
+                key=lambda m: weights[m],
+                reverse=True,
+            )
+            remaining_boxes = available_boxes
+            for m in ranked:
+                if remaining_boxes <= 0:
+                    break
+                sugg_boxes[m] = 1
+                remaining_boxes -= 1
+
         # Minimum boxes each country should keep to cover its forecast need.
         # Used when trimming, so a country with real (forecast) need doesn't
         # get cut to 0 just because its actual 30d velocity was low.
