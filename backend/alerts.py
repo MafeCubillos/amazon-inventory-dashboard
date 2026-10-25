@@ -137,27 +137,47 @@ def _load_tiktok_alerts(products: dict[str, dict]) -> list[dict]:
     except Exception as exc:
         logger.warning("alerts  tiktok_velocity read failed: %s", exc)
 
-    # 2b. Forecast fallback for ASINs with no real sales yet
+    # 2b. Forecast fallback (prefer forecast_computed, fall back to Google Sheet)
+    #     Fills TT velocity for ASINs with no real recent sales yet.
     try:
-        from backend.fetchers.forecast import fetch_forecast
-        fcst = fetch_forecast()
-    except Exception:
-        fcst = {}
-
-    for asin, info in (fcst or {}).items():
-        if asin in tt_vel:
-            continue    # real velocity already set
-        if not isinstance(info, dict):
-            continue
-        df = info.get("data")
-        if df is None or "TT" not in df.columns or cur_ym not in df.index:
-            continue
-        try:
-            monthly = float(df.loc[cur_ym, "TT"])
+        fc_rows = (
+            db_admin.table("forecast_computed")
+            .select("asin,units")
+            .eq("marketplace", "TT")
+            .eq("year_month", cur_ym)
+            .execute().data or []
+        )
+        for r in fc_rows:
+            asin = r["asin"]
+            if asin in tt_vel:
+                continue
+            monthly = float(r.get("units") or 0)
             if monthly > 0:
                 tt_vel[asin] = monthly / 30.0
+    except Exception as exc:
+        logger.warning("alerts  forecast_computed TT read failed: %s", exc)
+
+    # Last-resort fallback: Google Sheet (only if forecast_computed was empty)
+    if not any(v for v in tt_vel.values()):
+        try:
+            from backend.fetchers.forecast import fetch_forecast
+            fcst = fetch_forecast() or {}
         except Exception:
-            continue
+            fcst = {}
+        for asin, info in fcst.items():
+            if asin in tt_vel:
+                continue
+            if not isinstance(info, dict):
+                continue
+            df = info.get("data")
+            if df is None or "TT" not in df.columns or cur_ym not in df.index:
+                continue
+            try:
+                monthly = float(df.loc[cur_ym, "TT"])
+                if monthly > 0:
+                    tt_vel[asin] = monthly / 30.0
+            except Exception:
+                continue
 
     # 3. Build alert rows
     out: list[dict] = []
