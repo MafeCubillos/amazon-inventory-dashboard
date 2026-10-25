@@ -113,12 +113,45 @@ def _load_reorder_data() -> list[dict]:
     except Exception:
         tt = {}
 
-    # Forecast (optional)
+    # Forecast — PREFER forecast_computed (auto-generated, 12-month horizon,
+    # calendar-accurate from sales_monthly). Fall back to the Google Sheet only
+    # if forecast_computed is empty.
+    fcast_data: dict = {}
     try:
-        from backend.fetchers.forecast import fetch_forecast
-        fcast_data = fetch_forecast() or {}
-    except Exception:
-        fcast_data = {}
+        import pandas as _pd
+        from collections import defaultdict as _dd
+        fc_rows: list[dict] = []
+        _page = 0
+        while True:
+            _chunk = (
+                db_admin.table("forecast_computed")
+                .select("asin,marketplace,year_month,units")
+                .range(_page * 1000, (_page + 1) * 1000 - 1)
+                .execute().data or []
+            )
+            fc_rows.extend(_chunk)
+            if len(_chunk) < 1000:
+                break
+            _page += 1
+            if _page > 20:
+                break
+        per_asin: dict = _dd(lambda: _dd(dict))
+        for r in fc_rows:
+            per_asin[r["asin"]][r["year_month"]][r["marketplace"]] = int(r.get("units") or 0)
+        for asin, by_ym in per_asin.items():
+            yms = sorted(by_ym.keys())
+            mps = sorted({mp for row in by_ym.values() for mp in row.keys()})
+            data = [[by_ym[ym].get(mp, 0) for mp in mps] for ym in yms]
+            fcast_data[asin] = {"data": _pd.DataFrame(data, index=yms, columns=mps)}
+    except Exception as exc:
+        logger.warning("reorder_alerts  forecast_computed read failed: %s", exc)
+
+    if not fcast_data:
+        try:
+            from backend.fetchers.forecast import fetch_forecast
+            fcast_data = fetch_forecast() or {}
+        except Exception:
+            fcast_data = {}
 
     def _mk(offset: int) -> str:
         y = today.year + (today.month - 1 + offset) // 12
