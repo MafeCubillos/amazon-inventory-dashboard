@@ -266,7 +266,11 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
         tx_path   = _TRANSACTIONS_FMT.format(statement_id=stmt_id)
         tx_page_token = ""
         for page_i in range(200):
-            qs = {"page_size": "50"}
+            qs = {
+                "page_size":  "50",
+                "sort_field": "order_create_time",
+                "sort_order": "DESC",
+            }
             if tx_page_token:
                 qs["page_token"] = tx_page_token
             try:
