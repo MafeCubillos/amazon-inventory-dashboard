@@ -345,9 +345,9 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     for page_i in range(10):
         qs = {
             "page_size":       "50",
-            "payment_time_ge": str(start_ts),
-            "payment_time_lt": str(end_ts),
-            "sort_field":      "payment_time",
+            "create_time_ge":  str(start_ts),
+            "create_time_lt":  str(end_ts),
+            "sort_field":      "create_time",
             "sort_order":      "DESC",
         }
         if page_token:
