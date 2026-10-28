@@ -64,11 +64,17 @@ def _str(v) -> str | None:
     return s or None
 
 
+_TIKTOK_TZ = timezone(timedelta(hours=1))  # UTC+1 — matches TikTok's Finance
+                                            # Center "Timezone: UTC+1" header,
+                                            # so our statement_date buckets
+                                            # line up with the Excel reports.
+
+
 def _dt_from_ts(ts) -> str | None:
     if not ts:
         return None
     try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+        return datetime.fromtimestamp(int(ts), tz=_TIKTOK_TZ).date().isoformat()
     except (TypeError, ValueError):
         return None
 
