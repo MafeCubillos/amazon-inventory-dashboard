@@ -93,22 +93,15 @@ _ORDER_DETAILS_COLUMNS: list[tuple[str, str]] = [
 
 
 def _load_transactions(start: date, end: date) -> pd.DataFrame:
-    """Load finance rows whose ORDER was placed in [start, end].
-    Also includes rows with no order_created_date (adjustments) whose
-    statement_date falls in the window — so numbers don't disappear."""
+    """Load finance rows whose statement_date falls in [start, end] —
+    that matches the user's Google Sheet, which buckets by statement date."""
     from backend.database import db_admin
-    s, e = start.isoformat(), end.isoformat()
-    # Supabase .or_() = OR of filters; we want:
-    #   order_created_date BETWEEN s AND e
-    #   OR (order_created_date IS NULL AND statement_date BETWEEN s AND e)
     rows = (
         db_admin.table("tiktok_finance_transactions")
         .select("*")
-        .or_(
-            f"and(order_created_date.gte.{s},order_created_date.lte.{e}),"
-            f"and(order_created_date.is.null,statement_date.gte.{s},statement_date.lte.{e})"
-        )
-        .order("order_created_date", desc=True)
+        .gte("statement_date", start.isoformat())
+        .lte("statement_date", end.isoformat())
+        .order("statement_date", desc=True)
         .limit(50000)
         .execute()
         .data
@@ -545,12 +538,12 @@ def render_finance_page():
     with tab_pl:
         month_source_label = st.radio(
             "Agrupar por mes de:",
-            ["Order date", "Statement date"],
+            ["Statement date", "Order date"],
             horizontal=True, key="pl_month_source",
         )
-        month_source = ("order_created_date"
-                        if month_source_label == "Order date"
-                        else "statement_date")
+        month_source = ("statement_date"
+                        if month_source_label == "Statement date"
+                        else "order_created_date")
         units_total, units_per_product = _units_by_month(df, month_source)
         pl = _pl_pivot(df, units_total, units_per_product, month_source)
         if pl.empty:
