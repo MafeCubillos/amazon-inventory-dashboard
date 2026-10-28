@@ -185,6 +185,145 @@ def _pl_pivot(df: pd.DataFrame) -> pd.DataFrame:
     return pl[["Métrica", *months, "Total"]]
 
 
+def _load_order_items(order_ids: list[str]) -> pd.DataFrame:
+    from backend.database import db_admin
+    if not order_ids:
+        return pd.DataFrame()
+    # Supabase has a URL length limit — batch the IN query.
+    rows: list[dict] = []
+    batch_size = 300
+    for i in range(0, len(order_ids), batch_size):
+        chunk = order_ids[i:i + batch_size]
+        got = (
+            db_admin.table("tiktok_order_items")
+            .select("order_id,sku_id,product_id,product_name,sku_name,seller_sku,quantity")
+            .in_("order_id", chunk)
+            .execute()
+            .data
+        ) or []
+        rows.extend(got)
+    return pd.DataFrame(rows)
+
+
+def _load_cogs_map() -> dict[str, float]:
+    """product_id (TikTok) → cogs_eur (via tiktok_product_map → products)."""
+    from backend.database import db_admin
+    map_rows = (
+        db_admin.table("tiktok_product_map")
+        .select("tiktok_product_id,asin").execute().data
+    ) or []
+    pid_to_asin = {r["tiktok_product_id"]: r["asin"] for r in map_rows}
+    asins = list({v for v in pid_to_asin.values() if v})
+    cogs_by_asin: dict[str, float] = {}
+    for i in range(0, len(asins), 300):
+        chunk = asins[i:i + 300]
+        got = (
+            db_admin.table("products")
+            .select("asin,cogs_eur").in_("asin", chunk).execute().data
+        ) or []
+        for r in got:
+            if r.get("asin") and r.get("cogs_eur") is not None:
+                cogs_by_asin[r["asin"]] = float(r["cogs_eur"])
+    return {pid: cogs_by_asin[asin]
+            for pid, asin in pid_to_asin.items()
+            if asin in cogs_by_asin}
+
+
+def _render_per_product(fin_df: pd.DataFrame, start: date, end: date) -> None:
+    if fin_df.empty:
+        st.info("Sin datos. Haz Sync primero.")
+        return
+
+    order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
+    items = _load_order_items(order_ids)
+    if items.empty:
+        st.warning(
+            "No hay line-items para estos pedidos todavía. Haz click en "
+            "**🔄 Sync from TikTok** para que corra también el enrichment."
+        )
+        return
+
+    cogs_by_pid = _load_cogs_map()
+
+    # Join: items ⟵ finance (one tx per order_id, settlement/net_sales there)
+    fin_small = (
+        fin_df[["order_adjustment_id", "statement_date", "net_sales",
+                "total_settlement_amount"]]
+        .rename(columns={"order_adjustment_id": "order_id"})
+        .copy()
+    )
+    fin_small["order_id"] = fin_small["order_id"].astype(str)
+    merged = items.merge(fin_small, on="order_id", how="left")
+    merged["month"] = pd.to_datetime(merged["statement_date"]).dt.strftime("%Y-%m")
+    merged["cogs_unit"] = merged["product_id"].map(cogs_by_pid).fillna(0.0)
+    merged["cogs_total"] = merged["quantity"].fillna(0) * merged["cogs_unit"]
+
+    # Allocate order-level net_sales / settlement pro-rata by quantity across
+    # the order's SKUs (simple heuristic — fine when most orders are 1 SKU).
+    qty_by_order = merged.groupby("order_id")["quantity"].transform("sum").replace(0, 1)
+    merged["net_sales_alloc"]  = (
+        pd.to_numeric(merged["net_sales"], errors="coerce").fillna(0)
+        * merged["quantity"].fillna(0) / qty_by_order
+    )
+    merged["settlement_alloc"] = (
+        pd.to_numeric(merged["total_settlement_amount"], errors="coerce").fillna(0)
+        * merged["quantity"].fillna(0) / qty_by_order
+    )
+    merged["product_margin"]   = merged["settlement_alloc"] - merged["cogs_total"]
+
+    label = merged["product_name"].fillna(merged["sku_name"]).fillna(merged["sku_id"])
+    merged["product"] = label
+
+    # Pivot: rows = product, columns = month, value = metric
+    def _pivot(metric: str) -> pd.DataFrame:
+        p = merged.pivot_table(index="product", columns="month",
+                               values=metric, aggfunc="sum", fill_value=0)
+        p["Total"] = p.sum(axis=1)
+        p = p.reset_index().rename(columns={"product": "Producto"})
+        return p
+
+    st.caption(
+        "Agregado por mes de statement_date. **Net sales / Settlement** se "
+        "reparten por cantidad entre los SKUs de la orden. **COGS** viene de "
+        "`products.cogs_eur` vía `tiktok_product_map`."
+    )
+
+    metric = st.radio(
+        "Métrica",
+        ["Unit Sales", "COGS (EUR)", "Net sales (EUR)", "Settlement (EUR)",
+         "Product margin (EUR)"],
+        horizontal=True, key="prod_metric",
+    )
+    metric_col = {
+        "Unit Sales":              "quantity",
+        "COGS (EUR)":              "cogs_total",
+        "Net sales (EUR)":         "net_sales_alloc",
+        "Settlement (EUR)":        "settlement_alloc",
+        "Product margin (EUR)":    "product_margin",
+    }[metric]
+
+    pivot = _pivot(metric_col)
+    st.dataframe(pivot, use_container_width=True, height=500, hide_index=True)
+
+    buf = io.StringIO()
+    pivot.to_csv(buf, index=False)
+    st.download_button(
+        f"⬇️ Export {metric} CSV",
+        data=buf.getvalue().encode("utf-8-sig"),
+        file_name=f"tiktok_per_product_{metric.replace(' ', '_')}_{start}_{end}.csv",
+        mime="text/csv",
+    )
+
+    # Unmatched products warning
+    unmatched = merged[merged["cogs_unit"] == 0]["product"].unique()
+    if len(unmatched):
+        st.warning(
+            f"⚠️ {len(unmatched)} productos sin COGS en Supabase. Revisa que "
+            f"`tiktok_product_map` tenga su product_id mapeado a un ASIN con "
+            f"`products.cogs_eur`. Ejemplos: {list(unmatched)[:5]}"
+        )
+
+
 def render_finance_page():
     """Streamlit page: pulls TikTok finance transactions and exports to CSV."""
     st.markdown("#### 💰 Finance-TikTok")
@@ -209,12 +348,20 @@ def render_finance_page():
                                  use_container_width=True)
 
     if sync_clicked:
+        days = max((today - start).days + 1, 30)
         with st.spinner("Fetching from TikTok Finance API…"):
             from backend.fetchers.tiktok_finance import fetch_tiktok_finance
-            days = max((today - start).days + 1, 30)
             n_rows, warnings = fetch_tiktok_finance(days_back=days)
+        with st.spinner("Enriqueciendo con SKU/producto desde Order API…"):
+            try:
+                from backend.fetchers.tiktok_orders_enrich import enrich_tiktok_orders
+                n_items, w2 = enrich_tiktok_orders(days_back=days)
+                warnings += w2
+            except Exception as exc:
+                n_items = 0
+                warnings.append(f"Order enrichment skipped: {exc}")
         if n_rows:
-            st.success(f"✅ {n_rows} transacciones actualizadas.")
+            st.success(f"✅ {n_rows} transacciones · {n_items} line-items actualizados.")
         else:
             st.warning("No se actualizaron filas — revisa los mensajes abajo.")
         with st.expander("Detalles de la sincronización", expanded=not n_rows):
@@ -245,8 +392,12 @@ def render_finance_page():
         )
         return
 
-    # ── Two tabs: P&L view and raw table ───────────────────────
-    tab_pl, tab_raw = st.tabs(["📊 P&L por mes", "📋 Tabla cruda (Order details)"])
+    # ── Three tabs: P&L, por producto, tabla cruda ─────────────
+    tab_pl, tab_prod, tab_raw = st.tabs([
+        "📊 P&L por mes",
+        "📦 Por producto",
+        "📋 Tabla cruda (Order details)",
+    ])
 
     with tab_pl:
         pl = _pl_pivot(df)
@@ -267,6 +418,9 @@ def render_finance_page():
                 file_name=f"tiktok_pl_{start}_{end}.csv",
                 mime="text/csv",
             )
+
+    with tab_prod:
+        _render_per_product(df, start, end)
 
     with tab_raw:
         # CSV export (same columns as Order details) for pasting into Sheet
