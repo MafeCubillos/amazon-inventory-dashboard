@@ -146,13 +146,12 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, list[str], int]]]] = [
         ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"],             +1),
         ("Affiliate commission",                    ["affiliate_commission"],                   +1),
         ("Affiliate partner commission",            ["affiliate_partner_commission"],           +1),
-        ("Affiliate shop ads commission",           ["affiliate_shop_ads_commission"],          +1),
         ("Transaction / Campaign service fee",      ["campaign_service_fee"],                   +1),
         ("Tax and duty / VAT",                      ["tax_and_duty"],                           +1),
         ("Fees (total)",                            ["fees"],                                   +1),
     ]),
     ("Advertising", [
-        ("GMV Payment for TikTok Ads",              ["gmv_max_ad_fee"],                         +1),
+        ("GMV Payment for TikTok Ads",              ["affiliate_shop_ads_commission"],          +1),
     ]),
     ("Resultado", [
         ("Adjustments",                             ["adjustment_amount"],                      +1),
