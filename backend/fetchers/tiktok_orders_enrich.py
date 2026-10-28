@@ -104,9 +104,13 @@ def enrich_tiktok_orders(days_back: int = 90) -> tuple[int, list[str]]:
             "version":     "202309",
             **qs_extra,
         }
-        p["sign"] = _sign(app_secret, _ENDPOINT, p, body)
+        p["sign"] = _sign(app_secret, _ENDPOINT, p, body=body)
+        # IMPORTANT: must send the SAME bytes we signed, so serialize
+        # once with the compact separators and send via content=…, not
+        # json=…. httpx would add spaces → signature mismatch.
+        body_bytes = _json.dumps(body, separators=(",", ":")).encode()
         return httpx.post(
-            _BASE_URL + _ENDPOINT, params=p, json=body,
+            _BASE_URL + _ENDPOINT, params=p, content=body_bytes,
             headers={"x-tts-access-token": token,
                      "content-type": "application/json"},
             timeout=30,
@@ -131,7 +135,7 @@ def enrich_tiktok_orders(days_back: int = 90) -> tuple[int, list[str]]:
     page_token = ""
     all_orders: list[dict] = []
     for page_i in range(400):
-        qs = {"page_size": "50", "sort_field": "create_time", "sort_order": "DESC"}
+        qs = {"page_size": "50"}
         if page_token:
             qs["page_token"] = page_token
         try:

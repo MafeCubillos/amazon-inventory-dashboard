@@ -119,44 +119,169 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ── P&L row structure — mirrors the user's Google Sheet exactly ────
-# Rows marked SUM = computed sum of the preceding detail rows in the section.
-_PL_SECTIONS: list[tuple[str, list[tuple[str, list[str] | str]]]] = [
+# ── P&L structure — mirrors the user's Google Sheet exactly ────────
+# Each row is one of:
+#   {"raw": "field_name"}                     sum raw->>field (all types)
+#   {"raw": "field_name", "types": [...]}     sum raw->>field for those types
+#   {"settlement_for": "TYPE_NAME"}           sum settlement_amount for that type
+#   {"derived": "smart_promotion"}            fee_amount − detail fees (Fees-only
+#                                             residual that TikTok hides inside
+#                                             fee_amount)
+#   "SUM"                                     computed sum of this section's
+#                                             detail rows (shown bold/gray)
+#
+# The row key SOURCE_SPEC is what tells the pivot how to derive the value.
+# This structure is the ONLY place the mapping lives. Change a label, add
+# a new row, or point a row at a different raw field without touching code.
+_PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
     ("Totales", [
-        ("Total settlement amount",                 ["total_settlement_amount"]),
+        ("Total settlement amount",                 {"raw": "settlement_amount"}),
     ]),
     ("Net sales", [
-        ("Net sales",                               ["net_sales"]),
-        ("Subtotal before discounts",               ["subtotal_before_discounts"]),
-        ("Seller discounts",                        ["seller_discounts"]),
-        ("Refund subtotal before seller discounts", ["refund_subtotal_before_seller_discounts"]),
-        ("Refund of seller discounts",              ["refund_of_seller_discounts"]),
+        ("Net sales",                               "SUM"),
+        ("Subtotal before discounts",               {"raw": "gross_sales_amount",                "types": ["ORDER"]}),
+        ("Seller discounts",                        {"raw": "seller_discount_amount",            "types": ["ORDER"]}),
+        ("Refund subtotal before seller discounts", {"raw": "gross_sales_refund_amount",         "types": ["ORDER"]}),
+        ("Refund of seller discounts",              {"raw": "seller_discount_refund_amount",     "types": ["ORDER"]}),
     ]),
     ("Shipping", [
-        ("TikTok Shop shipping fee",                ["tiktok_shop_shipping_fee"]),
-        ("Fulfilled by TikTok Shop shipping fee",   ["fulfilled_by_tiktok_shop_shipping_fee"]),
-        ("Customer shipping fee",                   ["customer_shipping_fee"]),
-        ("Refunded customer shipping fee",          ["refunded_customer_shipping_fee"]),
-        ("TikTok Shop shipping incentive",          ["tiktok_shop_shipping_incentive"]),
-        ("Shipping subsidy",                        ["shipping_subsidy"]),
-        ("Actual return shipping fee",              ["actual_return_shipping_fee"]),
-        ("Shipping fee discount",                   ["shipping_fee_discount"]),
-        ("Fee for FBT free shipping",               ["fee_for_fbt_free_shipping"]),
         ("Shipping",                                "SUM"),
+        ("TikTok Shop shipping fee",                {"raw": "shipping_fee_amount",               "types": ["ORDER"]}),
+        ("Fulfilled by TikTok Shop shipping fee",   {"raw": "fbt_shipping_cost_amount",          "types": ["ORDER"]}),
+        ("Customer shipping fee",                   {"raw": "customer_shipping_fee_amount",      "types": ["ORDER"]}),
+        ("Refunded customer shipping fee",          {"raw": "customer_paid_shipping_fee_refund_amount", "types": ["ORDER"]}),
+        ("TikTok Shop shipping incentive",          {"raw": "promo_shipping_incentive_amount",   "types": ["ORDER"]}),
+        ("Shipping subsidy",                        {"raw": "shipping_fee_subsidy_amount",       "types": ["ORDER"]}),
+        ("Actual return shipping fee",              {"raw": "actual_return_shipping_fee_amount", "types": ["ORDER"]}),
+        ("Shipping fee discount",                   {"raw": "shipping_cost_discount_amount",     "types": ["ORDER"]}),
+        ("Return shipping label fee",               {"raw": "return_shipping_fee_amount",        "types": ["ORDER"]}),
+        ("Fee for FBT free shipping",               {"raw": "fbt_fulfillment_fee_amount",        "types": ["ORDER"]}),
     ]),
     ("Fees", [
-        ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"]),
-        ("Affiliate Commission",                    ["affiliate_commission"]),
-        ("Affiliate partner commission",            ["affiliate_partner_commission"]),
-        ("Campaign service fee",                    ["campaign_service_fee"]),
-        ("Tax and duty",                            ["tax_and_duty"]),
         ("Fees",                                    "SUM"),
+        ("TikTok Shop commission fee",              {"raw": "platform_commission_amount",        "types": ["ORDER"]}),
+        ("Affiliate Commission",                    {"raw": "affiliate_commission_amount",       "types": ["ORDER"]}),
+        ("Affiliate partner commission",            {"raw": "affiliate_partner_commission_amount","types": ["ORDER"]}),
+        ("Affiliate Shop Ads commission",           {"raw": "affiliate_ads_commission_amount",   "types": ["ORDER"]}),
+        ("Smart Promotion fee / otros",             {"derived": "smart_promotion"}),
     ]),
     ("Adjustments", [
-        ("GMV Payment for TikTok Ads",              ["affiliate_shop_ads_commission"]),
         ("Adjustments",                             "SUM"),
+        ("FBT warehouse service fee",               {"settlement_for": "FBT_WAREHOUSE_SERVICE_FEE"}),
+        ("Logistics reimbursement",                 {"settlement_for": "LOGISTICS_REIMBURSEMENT"}),
+        ("Logistics deduction",                     {"settlement_for": "LOGISTICS_DEDUCTION"}),
+        ("Net earnings balance",                    {"settlement_for": "NET_EARNINGS_BALANCE"}),
+        ("GMV Payment for TikTok Ads",              {"settlement_for": "GMV_PAYMENT_FOR_TIKTOK_ADS"}),
+        ("Bill payment (negative balance)",         {"settlement_for": "BILL_PAYMENT_FOR_NEGATIVE_BALANCE"}),
+        ("Bill deduction (negative balance)",       {"settlement_for": "BILL_DEDUCTION_FOR_NEGATIVE_BALANCE"}),
+        ("Chargeback",                              {"settlement_for": "CHARGEBACK"}),
+        ("Other adjustment",                        {"settlement_for": "OTHER_ADJUSTMENT"}),
     ]),
 ]
+
+# Fields that already appear somewhere in the P&L sections → used by the
+# "Unmapped fields" bucket to know what to EXCLUDE.
+_MAPPED_RAW_FIELDS = {
+    spec["raw"]
+    for _, section in _PL_SECTIONS
+    for _, spec in section
+    if isinstance(spec, dict) and "raw" in spec
+}
+# Also these are already part of the structure in other ways:
+_MAPPED_RAW_FIELDS |= {
+    "settlement_amount",     # Totales row
+    "fee_amount",            # Fees SUM reference (used by derived row)
+    "adjustment_amount",     # Covered by settlement_for rows
+    "net_sales_amount",      # Equals revenue_amount
+    "revenue_amount",        # Duplicated with net_sales
+    "after_seller_discounts_subtotal_amount",  # Derived: gross − discounts
+    "customer_payment_amount",   # Not a P&L line
+    "customer_refund_amount",    # Not a P&L line (duplicated by gross_sales_refund)
+    "customer_order_refund_amount",
+    "shipping_cost_amount",      # Duplicate of actual_shipping_fee_amount
+    "actual_shipping_fee_amount",
+    "customer_paid_shipping_fee_amount",  # Equal to customer_shipping_fee_amount
+    "platform_shipping_fee_discount_amount",  # Equal to shipping_cost_discount_amount
+    "affiliate_commission_before_pit",   # Duplicate of affiliate_commission_amount
+    # PIT and tax fields (regional specifics, zero for Spain):
+    "pit_amount", "iva_vat_amount", "sales_tax_amount",
+    "sales_tax_refund_amount", "sales_tax_payment_amount",
+    "isr_income_tax_amount", "retail_delivery_fee_amount",
+    "retail_delivery_fee_refund_amount", "retail_delivery_fee_payment_amount",
+    "fbm_shipping_cost_amount",   # 0 for Monvita (not Fulfilled by Merchant)
+    # ID / metadata fields:
+    "id", "order_id", "adjustment_id", "adjustment_order_id",
+    "order_create_time", "type", "currency",
+}
+
+
+def _sum_from_raw(dfx: pd.DataFrame, field: str,
+                  types: list[str] | None = None) -> dict[str, float]:
+    """Return {YYYY-MM: sum of raw->>field} optionally filtered by type.
+    Works even if the raw column stores dicts (jsonb from Supabase)."""
+    if "raw" not in dfx.columns:
+        return {}
+    sub = dfx if not types else dfx[dfx["type"].isin(types)]
+    if sub.empty:
+        return {}
+
+    def _val(r):
+        if r is None:
+            return 0.0
+        try:
+            v = r.get(field) if isinstance(r, dict) else None
+            if v is None or v == "":
+                return 0.0
+            return float(v)
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    vals = sub["raw"].map(_val)
+    return vals.groupby(sub["month"]).sum().to_dict()
+
+
+def _derive_smart_promotion(dfx: pd.DataFrame) -> dict[str, float]:
+    """Smart Promotion fee = fee_amount − (platform_commission + affiliate
+    + affiliate_partner + affiliate_ads). TikTok hides this inside fee_amount
+    on ORDER rows without exposing it as its own field."""
+    orders = dfx[dfx["type"] == "ORDER"]
+    if orders.empty:
+        return {}
+    def _get(r, k):
+        try: return float(r.get(k) or 0) if isinstance(r, dict) else 0.0
+        except Exception: return 0.0
+    fee = orders["raw"].map(lambda r: _get(r, "fee_amount"))
+    others = (
+        orders["raw"].map(lambda r: _get(r, "platform_commission_amount")) +
+        orders["raw"].map(lambda r: _get(r, "affiliate_commission_amount")) +
+        orders["raw"].map(lambda r: _get(r, "affiliate_partner_commission_amount")) +
+        orders["raw"].map(lambda r: _get(r, "affiliate_ads_commission_amount"))
+    )
+    diff = fee - others
+    return diff.groupby(orders["month"]).sum().to_dict()
+
+
+def _unmapped_fields_sums(dfx: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Discover ALL numeric raw fields that are non-zero AND not in the
+    _MAPPED_RAW_FIELDS set. Returns {field: {month: sum}} sorted by
+    |total|. This is the safety net for new TikTok fields."""
+    if "raw" not in dfx.columns or dfx.empty:
+        return {}
+    # Union of keys across all rows (cheap for a few thousand rows)
+    all_keys: set[str] = set()
+    for r in dfx["raw"].dropna():
+        if isinstance(r, dict):
+            all_keys.update(r.keys())
+    unknown = sorted(all_keys - _MAPPED_RAW_FIELDS)
+    out: dict[str, dict[str, float]] = {}
+    for k in unknown:
+        sums = _sum_from_raw(dfx, k, None)
+        total = sum(sums.values())
+        if abs(total) >= 0.01:
+            out[k] = sums
+    # Sort by |total| descending
+    return dict(sorted(out.items(),
+                       key=lambda kv: -abs(sum(kv[1].values()))))
 
 
 def _units_by_month(fin_df: pd.DataFrame,
@@ -196,18 +321,31 @@ def _units_by_month(fin_df: pd.DataFrame,
 def _pl_pivot(df: pd.DataFrame,
               units_total: dict[str, int],
               units_per_product: pd.DataFrame,
-              month_source: str = "order_created_date") -> pd.DataFrame:
+              month_source: str = "statement_date") -> pd.DataFrame:
     """Build a P&L DataFrame: rows = metrics, columns = months.
-    month_source: 'order_created_date' or 'statement_date'."""
+    Pulls every value from raw JSON (so new TikTok fields are never
+    silently ignored — they land in the 'Unmapped' section). Section
+    SUM rows are computed from the detail rows below them."""
     if df.empty or month_source not in df.columns:
         return pd.DataFrame()
     dfx = df.copy()
     dfx["month"] = pd.to_datetime(dfx[month_source]).dt.strftime("%Y-%m")
     all_months = sorted(dfx["month"].dropna().unique().tolist())
 
+    def _spec_values(spec) -> dict[str, float]:
+        if isinstance(spec, dict):
+            if "raw" in spec:
+                return _sum_from_raw(dfx, spec["raw"], spec.get("types"))
+            if "settlement_for" in spec:
+                return _sum_from_raw(dfx, "settlement_amount",
+                                     types=[spec["settlement_for"]])
+            if spec.get("derived") == "smart_promotion":
+                return _derive_smart_promotion(dfx)
+        return {}
+
     rows: list[dict] = []
 
-    # ── Quantity: total + one row per product ──────────────────────
+    # ── Quantity: total + per-product ──────────────────────────────
     rows.append({"Métrica": "━ Quantity ━"})
     qty_total = {"Métrica": "Quantity"}
     for m in all_months:
@@ -222,28 +360,43 @@ def _pl_pivot(df: pd.DataFrame,
             r["Total"] = sum(r[m] for m in all_months)
             rows.append(r)
 
+    # ── P&L sections (SUM rows reference detail rows BELOW them) ───
     for section_name, metrics in _PL_SECTIONS:
         rows.append({"Métrica": f"━ {section_name} ━"})
-        section_detail_rows: list[dict] = []
-        for label, cols in metrics:
-            if cols == "SUM":
-                summed = {"Métrica": label}
-                for m in all_months:
-                    summed[m] = round(sum(r.get(m, 0) or 0 for r in section_detail_rows), 2)
-                summed["Total"] = round(sum(summed[m] for m in all_months), 2)
-                rows.append(summed)
+
+        # First compute every detail row
+        detail: dict[str, dict] = {}
+        for label, spec in metrics:
+            if spec == "SUM":
                 continue
-            present = [c for c in cols if c in dfx.columns]
-            if not present:
-                continue
-            series = pd.to_numeric(dfx[present[0]], errors="coerce").fillna(0)
-            by_month = series.groupby(dfx["month"]).sum().to_dict()
+            by_month = _spec_values(spec)
             row = {"Métrica": label}
             for m in all_months:
                 row[m] = round(float(by_month.get(m, 0.0)), 2)
             row["Total"] = round(sum(row[m] for m in all_months), 2)
+            detail[label] = row
+
+        # Then emit in declared order (SUM pulls from `detail`)
+        for label, spec in metrics:
+            if spec == "SUM":
+                summed = {"Métrica": label}
+                for m in all_months:
+                    summed[m] = round(sum(r[m] for r in detail.values()), 2)
+                summed["Total"] = round(sum(summed[m] for m in all_months), 2)
+                rows.append(summed)
+            else:
+                rows.append(detail[label])
+
+    # ── Unmapped fields — safety net for new TikTok fields ─────────
+    unmapped = _unmapped_fields_sums(dfx)
+    if unmapped:
+        rows.append({"Métrica": "━ Campos sin mapear (NUEVOS) ━"})
+        for field, sums in unmapped.items():
+            row = {"Métrica": f"   {field}"}
+            for m in all_months:
+                row[m] = round(float(sums.get(m, 0.0)), 2)
+            row["Total"] = round(sum(row[m] for m in all_months), 2)
             rows.append(row)
-            section_detail_rows.append(row)
 
     pl = pd.DataFrame(rows).fillna("")
     return pl[["Métrica", *all_months, "Total"]]
@@ -258,7 +411,6 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
     sum_labels   = {"Shipping", "Fees", "Adjustments", "Quantity",
                     "Total settlement amount", "Net sales"}
     sum_mask     = pl["Métrica"].astype(str).isin(sum_labels)
-    is_quantity_section = False  # tracked while iterating
 
     headers = list(pl.columns)
     th = "".join(
