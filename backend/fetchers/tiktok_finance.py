@@ -228,6 +228,8 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
             "page_size":         "50",
             "statement_time_ge": str(start_ts),
             "statement_time_lt": str(end_ts),
+            "sort_field":        "statement_time",
+            "sort_order":        "DESC",
         }
         if page_token:
             qs["page_token"] = page_token
