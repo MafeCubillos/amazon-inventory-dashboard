@@ -387,16 +387,13 @@ def _pl_pivot(df: pd.DataFrame,
             else:
                 rows.append(detail[label])
 
-    # ── Unmapped fields — safety net for new TikTok fields ─────────
-    unmapped = _unmapped_fields_sums(dfx)
-    if unmapped:
-        rows.append({"Métrica": "━ Campos sin mapear (NUEVOS) ━"})
-        for field, sums in unmapped.items():
-            row = {"Métrica": f"   {field}"}
-            for m in all_months:
-                row[m] = round(float(sums.get(m, 0.0)), 2)
-            row["Total"] = round(sum(row[m] for m in all_months), 2)
-            rows.append(row)
+    # ── Unmapped fields — logged to session_state only (not rendered
+    #    in the P&L to keep it clean). The caller can show them in an
+    #    expander outside the P&L table.
+    try:
+        st.session_state["pl_unmapped"] = _unmapped_fields_sums(dfx)
+    except Exception:
+        pass
 
     pl = pd.DataFrame(rows).fillna("")
     return pl[["Métrica", *all_months, "Total"]]
@@ -714,6 +711,28 @@ def render_finance_page():
                     "actualizados'."
                 )
             st.markdown(_render_pl_html(pl), unsafe_allow_html=True)
+            # Advanced: show unmapped fields in a collapsed expander so new
+            # TikTok fields never silently miss, but the P&L stays clean.
+            unmapped = st.session_state.get("pl_unmapped") or {}
+            if unmapped:
+                with st.expander(
+                    f"🔍 Campos del raw sin mapear al P&L ({len(unmapped)})",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Estos campos vienen en el raw del API pero no están "
+                        "en ninguna fila del P&L. Si alguno es relevante, "
+                        "dilo y lo agrego a la sección correcta."
+                    )
+                    rows_un = []
+                    for field, sums in unmapped.items():
+                        r = {"Campo (raw)": field,
+                             "Total": round(sum(sums.values()), 2)}
+                        for m, v in sums.items():
+                            r[m] = round(v, 2)
+                        rows_un.append(r)
+                    st.dataframe(pd.DataFrame(rows_un),
+                                 use_container_width=True, hide_index=True)
             buf_pl = io.StringIO()
             pl.to_csv(buf_pl, index=False)
             st.download_button(
