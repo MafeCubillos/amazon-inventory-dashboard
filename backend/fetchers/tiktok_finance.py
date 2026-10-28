@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _BASE_URL         = "https://open-api.tiktokglobalshop.com"
 _STATEMENTS_PATH  = "/finance/202309/statements"
 _TRANSACTIONS_FMT = "/finance/202309/statements/{statement_id}/statement_transactions"
+_PAYMENTS_PATH    = "/finance/202309/payments"
 
 
 def _sign(app_secret: str, path: str, params: dict) -> str:
@@ -332,4 +333,76 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     warnings.append(f"Transactions scanned: {total_tx}. Rows upserted: {upserted}.")
     logger.info("tiktok_finance  %d statements, %d transactions, %d upserted",
                 len(statements), total_tx, upserted)
+
+    # ── Step 3: pull Payments endpoint (Top-up ads balance, Bill deduction
+    #            for negative balance, etc.) — these are account-level
+    #            balance adjustments that /statements_transactions omits ──
+    payments: list[dict] = []
+    page_token = ""
+    for page_i in range(100):
+        qs = {
+            "page_size":       "50",
+            "payment_time_ge": str(start_ts),
+            "payment_time_lt": str(end_ts),
+            "sort_field":      "payment_time",
+            "sort_order":      "DESC",
+        }
+        if page_token:
+            qs["page_token"] = page_token
+        try:
+            r = _request("GET", _PAYMENTS_PATH, qs)
+        except Exception as exc:
+            warnings.append(f"Payments HTTP error p{page_i}: {exc}")
+            break
+        if r.status_code != 200:
+            warnings.append(f"Payments HTTP {r.status_code}: {r.text[:200]}")
+            break
+        body = r.json()
+        if body.get("code") != 0:
+            warnings.append(f"Payments API code {body.get('code')}: {body.get('message')}")
+            break
+        data = body.get("data") or {}
+        payments.extend(data.get("payments") or [])
+        page_token = data.get("next_page_token") or ""
+        if not page_token:
+            break
+
+    warnings.append(f"Payments fetched: {len(payments)}.")
+    pay_upserted = 0
+    for pay in payments:
+        pay_id   = _str(pay.get("id") or pay.get("payment_id"))
+        pay_type = _str(pay.get("type") or pay.get("payment_type")) or "PAYMENT"
+        if not pay_id:
+            continue
+        pay_date = _dt_from_ts(pay.get("payment_time") or pay.get("statement_time"))
+        settlement = _dec(pay.get("settlement_amount")
+                          or pay.get("net_amount")
+                          or pay.get("amount"))
+        row = {
+            # Store payment as a pseudo-statement so the UI can treat it
+            # uniformly. statement_id = payment_id, order_adjustment_id
+            # = payment_id so the unique key stays unique.
+            "statement_id":        pay_id,
+            "order_adjustment_id": pay_id,
+            "type":                pay_type,
+            "shop_cipher":         shop_cipher,
+            "statement_date":      pay_date,
+            # Mirror the amount in the raw fields the pivot already knows,
+            # so the Adjustments section can read it from settlement_amount.
+            "raw": {**pay,
+                    "settlement_amount": str(settlement) if settlement is not None else "0",
+                    "type": pay_type},
+            "fetched_at":          datetime.now(timezone.utc).isoformat(),
+            "total_settlement_amount": settlement,
+        }
+        try:
+            db_admin.table("tiktok_finance_transactions").upsert(
+                row, on_conflict="statement_id,order_adjustment_id,type"
+            ).execute()
+            pay_upserted += 1
+        except Exception as exc:
+            warnings.append(f"Save failed payment={pay_id}: {exc}")
+
+    warnings.append(f"Payments upserted: {pay_upserted}.")
+    upserted += pay_upserted
     return upserted, warnings
