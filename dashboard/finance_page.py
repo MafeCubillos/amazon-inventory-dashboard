@@ -160,7 +160,10 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
         # Section total uses TikTok's own shipping_cost_amount (per-order
         # shipping subtotal). Matches Report's "Shipping" exactly.
         ("Shipping",                                {"raw": "shipping_cost_amount",              "types": ["ORDER"]}),
-        ("TikTok Shop shipping fee",                {"raw": "shipping_fee_amount",               "types": ["ORDER"]}),
+        # "TikTok Shop shipping fee" is always 0 for Monvita's Report —
+        # the API's shipping_fee_amount measures something else, so map
+        # to a nonexistent field to show 0 consistently.
+        ("TikTok Shop shipping fee",                {"raw": "__none__",                          "types": ["ORDER"]}),
         ("Fulfilled by TikTok Shop shipping fee",   {"raw": "fbt_shipping_cost_amount",          "types": ["ORDER"]}),
         ("Customer shipping fee",                   {"raw": "customer_shipping_fee_amount",      "types": ["ORDER"]}),
         ("Refunded customer shipping fee",          {"raw": "customer_paid_shipping_fee_refund_amount", "types": ["ORDER"]}),
@@ -246,6 +249,7 @@ _MAPPED_RAW_FIELDS |= {
     "customer_shipping_fee_offset_amount",
     "referral_fee_amount",
     "retail_delivery_fee_refund_amount",
+    "shipping_fee_amount",   # Does NOT match Report's "TikTok Shop shipping fee"
     # ID / metadata fields:
     "id", "order_id", "adjustment_id", "adjustment_order_id",
     "order_create_time", "type", "currency",

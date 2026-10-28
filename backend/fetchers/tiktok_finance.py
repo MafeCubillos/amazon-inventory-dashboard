@@ -342,7 +342,7 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     # 3 months.
     payments: list[dict] = []
     page_token = ""
-    for page_i in range(20):
+    for page_i in range(10):
         qs = {
             "page_size":       "50",
             "payment_time_ge": str(start_ts),
@@ -353,7 +353,22 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
         if page_token:
             qs["page_token"] = page_token
         try:
-            r = _request("GET", _PAYMENTS_PATH, qs)
+            # Short timeout and inline httpx call — if the endpoint
+            # doesn't exist, fail fast instead of blocking the sync.
+            p = {
+                "app_key":     app_key,
+                "timestamp":   str(int(time.time())),
+                "shop_cipher": shop_cipher,
+                "version":     "202309",
+                **qs,
+            }
+            p["sign"] = _sign(app_secret, _PAYMENTS_PATH, p)
+            r = httpx.get(
+                _BASE_URL + _PAYMENTS_PATH, params=p,
+                headers={"x-tts-access-token": access_token,
+                         "content-type": "application/json"},
+                timeout=10,
+            )
         except Exception as exc:
             warnings.append(f"Payments HTTP error p{page_i}: {exc}")
             break
