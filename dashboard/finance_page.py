@@ -133,45 +133,65 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
 # The row key SOURCE_SPEC is what tells the pivot how to derive the value.
 # This structure is the ONLY place the mapping lives. Change a label, add
 # a new row, or point a row at a different raw field without touching code.
+_NON_ORDER_TYPES = [
+    "FBT_WAREHOUSE_SERVICE_FEE", "LOGISTICS_REIMBURSEMENT",
+    "LOGISTICS_DEDUCTION", "NET_EARNINGS_BALANCE",
+    "TOP_UP_ADS_BALANCE_USING_GMV_PAYMENTS",
+    "BILL_PAYMENT_FOR_NEGATIVE_BALANCE",
+    "BILL_DEDUCTION_FOR_NEGATIVE_BALANCE",
+    "CHARGEBACK", "OTHER_ADJUSTMENT",
+    "TAX_ADJUSTMENT", "SELLER_MISSION_REWARD",
+    "PROMOTION_ADJUSTMENT",
+]
+
 _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
     ("Totales", [
         ("Total settlement amount",                 {"raw": "settlement_amount"}),
     ]),
     ("Net sales", [
-        ("Net sales",                               "SUM"),
+        # Section total uses TikTok's own net_sales_amount; subrows are per-field.
+        ("Net sales",                               {"raw": "net_sales_amount",                  "types": ["ORDER"]}),
         ("Subtotal before discounts",               {"raw": "gross_sales_amount",                "types": ["ORDER"]}),
         ("Seller discounts",                        {"raw": "seller_discount_amount",            "types": ["ORDER"]}),
         ("Refund subtotal before seller discounts", {"raw": "gross_sales_refund_amount",         "types": ["ORDER"]}),
         ("Refund of seller discounts",              {"raw": "seller_discount_refund_amount",     "types": ["ORDER"]}),
     ]),
     ("Shipping", [
-        ("Shipping",                                "SUM"),
+        # Section total uses TikTok's own shipping_cost_amount (per-order
+        # shipping subtotal). Matches Report's "Shipping" exactly.
+        ("Shipping",                                {"raw": "shipping_cost_amount",              "types": ["ORDER"]}),
         ("TikTok Shop shipping fee",                {"raw": "shipping_fee_amount",               "types": ["ORDER"]}),
         ("Fulfilled by TikTok Shop shipping fee",   {"raw": "fbt_shipping_cost_amount",          "types": ["ORDER"]}),
         ("Customer shipping fee",                   {"raw": "customer_shipping_fee_amount",      "types": ["ORDER"]}),
         ("Refunded customer shipping fee",          {"raw": "customer_paid_shipping_fee_refund_amount", "types": ["ORDER"]}),
-        ("TikTok Shop shipping incentive",          {"raw": "promo_shipping_incentive_amount",   "types": ["ORDER"]}),
+        ("TikTok Shop shipping incentive",          {"raw": "shipping_cost_discount_amount",     "types": ["ORDER"]}),
+        ("TikTok Shop shipping incentive refund",   {"raw": "refund_shipping_cost_discount_amount","types": ["ORDER"]}),
         ("Shipping subsidy",                        {"raw": "shipping_fee_subsidy_amount",       "types": ["ORDER"]}),
         ("Actual return shipping fee",              {"raw": "actual_return_shipping_fee_amount", "types": ["ORDER"]}),
-        ("Shipping fee discount",                   {"raw": "shipping_cost_discount_amount",     "types": ["ORDER"]}),
         ("Return shipping label fee",               {"raw": "return_shipping_fee_amount",        "types": ["ORDER"]}),
-        ("Fee for FBT free shipping",               {"raw": "fbt_fulfillment_fee_amount",        "types": ["ORDER"]}),
+        # Fee for FBT free shipping = shipping_cost - fulfilled - incentive
+        # - customer - refunded_customer. Verified across Aug totals and the
+        # single-order sample.
+        ("Fee for FBT free shipping",               {"derived": "fbt_free_shipping"}),
     ]),
     ("Fees", [
-        ("Fees",                                    "SUM"),
+        # Section total uses TikTok's own fee_amount (per-order fees total).
+        ("Fees",                                    {"raw": "fee_amount",                        "types": ["ORDER"]}),
         ("TikTok Shop commission fee",              {"raw": "platform_commission_amount",        "types": ["ORDER"]}),
         ("Affiliate Commission",                    {"raw": "affiliate_commission_amount",       "types": ["ORDER"]}),
         ("Affiliate partner commission",            {"raw": "affiliate_partner_commission_amount","types": ["ORDER"]}),
         ("Affiliate Shop Ads commission",           {"raw": "affiliate_ads_commission_amount",   "types": ["ORDER"]}),
-        ("Smart Promotion fee / otros",             {"derived": "smart_promotion"}),
+        # Smart Promotion = fee_amount − commission − affiliate − partner − ads
+        ("Smart Promotion fee",                     {"derived": "smart_promotion"}),
     ]),
     ("Adjustments", [
-        ("Adjustments",                             "SUM"),
+        # Section total = sum settlement_amount for ALL non-ORDER types
+        ("Adjustments",                             {"raw": "settlement_amount", "types": _NON_ORDER_TYPES}),
         ("FBT warehouse service fee",               {"settlement_for": "FBT_WAREHOUSE_SERVICE_FEE"}),
         ("Logistics reimbursement",                 {"settlement_for": "LOGISTICS_REIMBURSEMENT"}),
         ("Logistics deduction",                     {"settlement_for": "LOGISTICS_DEDUCTION"}),
-        ("Net earnings balance",                    {"settlement_for": "NET_EARNINGS_BALANCE"}),
-        ("GMV Payment for TikTok Ads",              {"settlement_for": "GMV_PAYMENT_FOR_TIKTOK_ADS"}),
+        ("Sales proceed (negative balance)",        {"settlement_for": "NET_EARNINGS_BALANCE"}),
+        ("GMV Payment for TikTok Ads",              {"settlement_for": "TOP_UP_ADS_BALANCE_USING_GMV_PAYMENTS"}),
         ("Bill payment (negative balance)",         {"settlement_for": "BILL_PAYMENT_FOR_NEGATIVE_BALANCE"}),
         ("Bill deduction (negative balance)",       {"settlement_for": "BILL_DEDUCTION_FOR_NEGATIVE_BALANCE"}),
         ("Chargeback",                              {"settlement_for": "CHARGEBACK"}),
@@ -190,25 +210,42 @@ _MAPPED_RAW_FIELDS = {
 # Also these are already part of the structure in other ways:
 _MAPPED_RAW_FIELDS |= {
     "settlement_amount",     # Totales row
-    "fee_amount",            # Fees SUM reference (used by derived row)
-    "adjustment_amount",     # Covered by settlement_for rows
-    "net_sales_amount",      # Equals revenue_amount
+    "net_sales_amount",      # Net sales row (ORDER type)
     "revenue_amount",        # Duplicated with net_sales
+    "fee_amount",            # Fees row (ORDER type)
+    "shipping_cost_amount",  # Shipping row (ORDER type)
+    "adjustment_amount",     # Covered by settlement_for rows
     "after_seller_discounts_subtotal_amount",  # Derived: gross − discounts
-    "customer_payment_amount",   # Not a P&L line
-    "customer_refund_amount",    # Not a P&L line (duplicated by gross_sales_refund)
+    "customer_payment_amount",      # Not a P&L line (duplicate of net_sales)
+    "customer_refund_amount",       # Covered by gross_sales_refund
     "customer_order_refund_amount",
-    "shipping_cost_amount",      # Duplicate of actual_shipping_fee_amount
-    "actual_shipping_fee_amount",
-    "customer_paid_shipping_fee_amount",  # Equal to customer_shipping_fee_amount
-    "platform_shipping_fee_discount_amount",  # Equal to shipping_cost_discount_amount
-    "affiliate_commission_before_pit",   # Duplicate of affiliate_commission_amount
+    "actual_shipping_fee_amount",   # Duplicate of fbt_shipping_cost_amount
+    "customer_paid_shipping_fee_amount",   # Duplicate of customer_shipping_fee
+    "platform_shipping_fee_discount_amount",  # Duplicate of shipping_cost_discount
+    "affiliate_commission_before_pit",     # Duplicate of affiliate_commission
+    # Platform discounts: not in Report tab, part of Customer payment flow
+    "platform_discount_amount",
+    "platform_discount_refund_amount",
+    "platform_refund_subsidy_amount",
     # PIT and tax fields (regional specifics, zero for Spain):
     "pit_amount", "iva_vat_amount", "sales_tax_amount",
     "sales_tax_refund_amount", "sales_tax_payment_amount",
     "isr_income_tax_amount", "retail_delivery_fee_amount",
     "retail_delivery_fee_refund_amount", "retail_delivery_fee_payment_amount",
     "fbm_shipping_cost_amount",   # 0 for Monvita (not Fulfilled by Merchant)
+    # Promo field we track as 'TikTok Shop shipping incentive refund'
+    "refund_shipping_cost_discount_amount",
+    # Other fields TikTok ships but aren't P&L lines:
+    "promo_shipping_incentive_amount",   # 0 — superseded by shipping_cost_discount
+    "fbt_fulfillment_fee_amount",
+    "fbt_fulfillment_fee_reimbursement_amount",
+    "refund_administration_fee_amount",
+    "signature_confirmation_fee_amount",
+    "transaction_fee_amount",
+    "shipping_insurance_fee_amount",
+    "customer_shipping_fee_offset_amount",
+    "referral_fee_amount",
+    "retail_delivery_fee_refund_amount",
     # ID / metadata fields:
     "id", "order_id", "adjustment_id", "adjustment_order_id",
     "order_create_time", "type", "currency",
@@ -240,6 +277,13 @@ def _sum_from_raw(dfx: pd.DataFrame, field: str,
     return vals.groupby(sub["month"]).sum().to_dict()
 
 
+def _get_raw(r, k):
+    try:
+        return float(r.get(k) or 0) if isinstance(r, dict) else 0.0
+    except Exception:
+        return 0.0
+
+
 def _derive_smart_promotion(dfx: pd.DataFrame) -> dict[str, float]:
     """Smart Promotion fee = fee_amount − (platform_commission + affiliate
     + affiliate_partner + affiliate_ads). TikTok hides this inside fee_amount
@@ -247,17 +291,34 @@ def _derive_smart_promotion(dfx: pd.DataFrame) -> dict[str, float]:
     orders = dfx[dfx["type"] == "ORDER"]
     if orders.empty:
         return {}
-    def _get(r, k):
-        try: return float(r.get(k) or 0) if isinstance(r, dict) else 0.0
-        except Exception: return 0.0
-    fee = orders["raw"].map(lambda r: _get(r, "fee_amount"))
+    fee = orders["raw"].map(lambda r: _get_raw(r, "fee_amount"))
     others = (
-        orders["raw"].map(lambda r: _get(r, "platform_commission_amount")) +
-        orders["raw"].map(lambda r: _get(r, "affiliate_commission_amount")) +
-        orders["raw"].map(lambda r: _get(r, "affiliate_partner_commission_amount")) +
-        orders["raw"].map(lambda r: _get(r, "affiliate_ads_commission_amount"))
+        orders["raw"].map(lambda r: _get_raw(r, "platform_commission_amount")) +
+        orders["raw"].map(lambda r: _get_raw(r, "affiliate_commission_amount")) +
+        orders["raw"].map(lambda r: _get_raw(r, "affiliate_partner_commission_amount")) +
+        orders["raw"].map(lambda r: _get_raw(r, "affiliate_ads_commission_amount"))
     )
     diff = fee - others
+    return diff.groupby(orders["month"]).sum().to_dict()
+
+
+def _derive_fbt_free_shipping(dfx: pd.DataFrame) -> dict[str, float]:
+    """Fee for FBT free shipping = shipping_cost_amount
+       − fbt_shipping_cost_amount
+       − shipping_cost_discount_amount
+       − customer_shipping_fee_amount
+       − customer_paid_shipping_fee_refund_amount
+    (verified against Aug totals: -155.18 + 447.34 − 322.52 − 21.36 + 3.99
+     = −47.73, matches user's sheet)."""
+    orders = dfx[dfx["type"] == "ORDER"]
+    if orders.empty:
+        return {}
+    s = orders["raw"].map(lambda r: _get_raw(r, "shipping_cost_amount"))
+    fbt = orders["raw"].map(lambda r: _get_raw(r, "fbt_shipping_cost_amount"))
+    inc = orders["raw"].map(lambda r: _get_raw(r, "shipping_cost_discount_amount"))
+    cs  = orders["raw"].map(lambda r: _get_raw(r, "customer_shipping_fee_amount"))
+    rcs = orders["raw"].map(lambda r: _get_raw(r, "customer_paid_shipping_fee_refund_amount"))
+    diff = s - fbt - inc - cs - rcs
     return diff.groupby(orders["month"]).sum().to_dict()
 
 
@@ -341,6 +402,8 @@ def _pl_pivot(df: pd.DataFrame,
                                      types=[spec["settlement_for"]])
             if spec.get("derived") == "smart_promotion":
                 return _derive_smart_promotion(dfx)
+            if spec.get("derived") == "fbt_free_shipping":
+                return _derive_fbt_free_shipping(dfx)
         return {}
 
     rows: list[dict] = []
@@ -360,32 +423,16 @@ def _pl_pivot(df: pd.DataFrame,
             r["Total"] = sum(r[m] for m in all_months)
             rows.append(r)
 
-    # ── P&L sections (SUM rows reference detail rows BELOW them) ───
+    # ── P&L sections — every row pulls from raw directly (no SUM) ──
     for section_name, metrics in _PL_SECTIONS:
         rows.append({"Métrica": f"━ {section_name} ━"})
-
-        # First compute every detail row
-        detail: dict[str, dict] = {}
         for label, spec in metrics:
-            if spec == "SUM":
-                continue
             by_month = _spec_values(spec)
             row = {"Métrica": label}
             for m in all_months:
                 row[m] = round(float(by_month.get(m, 0.0)), 2)
             row["Total"] = round(sum(row[m] for m in all_months), 2)
-            detail[label] = row
-
-        # Then emit in declared order (SUM pulls from `detail`)
-        for label, spec in metrics:
-            if spec == "SUM":
-                summed = {"Métrica": label}
-                for m in all_months:
-                    summed[m] = round(sum(r[m] for r in detail.values()), 2)
-                summed["Total"] = round(sum(summed[m] for m in all_months), 2)
-                rows.append(summed)
-            else:
-                rows.append(detail[label])
+            rows.append(row)
 
     # ── Unmapped fields — logged to session_state only (not rendered
     #    in the P&L to keep it clean). The caller can show them in an
@@ -405,8 +452,9 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
     and inject it with st.markdown(unsafe_allow_html=True) for full
     control over row backgrounds and the dark/green header."""
     section_mask = pl["Métrica"].astype(str).str.startswith("━")
-    sum_labels   = {"Shipping", "Fees", "Adjustments", "Quantity",
-                    "Total settlement amount", "Net sales"}
+    # First row in each section is a TOTAL — bold + gray background.
+    sum_labels   = {"Total settlement amount", "Net sales",
+                    "Shipping", "Fees", "Adjustments", "Quantity"}
     sum_mask     = pl["Métrica"].astype(str).isin(sum_labels)
 
     headers = list(pl.columns)
