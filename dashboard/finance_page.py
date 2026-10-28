@@ -126,19 +126,18 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ── P&L row structure (metric label, db columns to sum) ────────────
-# Each section has detail rows and ends with a computed total row.
-# Mirrors the P&L / P&LBase tabs of the Google Sheet.
-# Rows marked SUM = sum of the detail rows above (computed, not from a column).
+# ── P&L row structure — mirrors the user's Google Sheet exactly ────
+# Rows marked SUM = computed sum of the preceding detail rows in the section.
 _PL_SECTIONS: list[tuple[str, list[tuple[str, list[str] | str]]]] = [
-    ("Ventas", [
-        ("GMV incl VAT",                            ["subtotal_before_discounts"]),
+    ("Totales", [
+        ("Total settlement amount",                 ["total_settlement_amount"]),
+    ]),
+    ("Net sales", [
+        ("Net sales",                               ["net_sales"]),
+        ("Subtotal before discounts",               ["subtotal_before_discounts"]),
         ("Seller discounts",                        ["seller_discounts"]),
         ("Refund subtotal before seller discounts", ["refund_subtotal_before_seller_discounts"]),
         ("Refund of seller discounts",              ["refund_of_seller_discounts"]),
-        ("Net sales",                               ["net_sales"]),
-        ("Customer payment",                        ["customer_payment"]),
-        ("Customer refund",                         ["customer_refund"]),
     ]),
     ("Shipping", [
         ("TikTok Shop shipping fee",                ["tiktok_shop_shipping_fee"]),
@@ -150,37 +149,35 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, list[str] | str]]]] = [
         ("Actual return shipping fee",              ["actual_return_shipping_fee"]),
         ("Shipping fee discount",                   ["shipping_fee_discount"]),
         ("Fee for FBT free shipping",               ["fee_for_fbt_free_shipping"]),
-        ("Shipping (total)",                        "SUM"),
+        ("Shipping",                                "SUM"),
     ]),
     ("Fees", [
         ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"]),
-        ("Affiliate commission",                    ["affiliate_commission"]),
+        ("Affiliate Commission",                    ["affiliate_commission"]),
         ("Affiliate partner commission",            ["affiliate_partner_commission"]),
-        ("Transaction / Campaign service fee",      ["campaign_service_fee"]),
-        ("Tax and duty / VAT",                      ["tax_and_duty"]),
-        ("Fees (total)",                            "SUM"),
+        ("Campaign service fee",                    ["campaign_service_fee"]),
+        ("Tax and duty",                            ["tax_and_duty"]),
+        ("Fees",                                    "SUM"),
     ]),
-    ("Advertising", [
+    ("Adjustments", [
         ("GMV Payment for TikTok Ads",              ["affiliate_shop_ads_commission"]),
-        ("Advertising (total)",                     "SUM"),
-    ]),
-    ("Resultado", [
-        ("Adjustments",                             ["adjustment_amount"]),
-        ("Total settlement",                        ["total_settlement_amount"]),
+        ("Adjustments",                             "SUM"),
     ]),
 ]
 
 
-def _units_by_month(fin_df: pd.DataFrame) -> dict[str, int]:
-    """Return {YYYY-MM: unit count} from tiktok_order_items joined to the
-    orders currently loaded in fin_df (by order_created_date)."""
+def _units_by_month(fin_df: pd.DataFrame) -> tuple[dict[str, int], pd.DataFrame]:
+    """Returns:
+       - {YYYY-MM: total units} across all products
+       - DataFrame with rows = product_name, cols = month, values = units
+    Both derived from tiktok_order_items joined to fin_df by order_id."""
+    empty = ({}, pd.DataFrame())
     if fin_df.empty:
-        return {}
+        return empty
     order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
     items = _load_order_items(order_ids)
     if items.empty:
-        return {}
-    # month comes from the finance row's order_created_date
+        return empty
     fin_small = (
         fin_df[["order_adjustment_id", "order_created_date"]]
         .rename(columns={"order_adjustment_id": "order_id"})
@@ -189,13 +186,23 @@ def _units_by_month(fin_df: pd.DataFrame) -> dict[str, int]:
     fin_small["order_id"] = fin_small["order_id"].astype(str)
     merged = items.merge(fin_small, on="order_id", how="left")
     merged["month"] = pd.to_datetime(merged["order_created_date"]).dt.strftime("%Y-%m")
-    return (
-        merged.dropna(subset=["month"])
-              .groupby("month")["quantity"].sum().astype(int).to_dict()
+    merged = merged.dropna(subset=["month"])
+    totals = merged.groupby("month")["quantity"].sum().astype(int).to_dict()
+
+    # Per-product breakdown (short label from product_name or sku_name)
+    label = (merged["product_name"].fillna(merged["sku_name"])
+                                    .fillna(merged["sku_id"]))
+    merged["producto"] = label
+    per_product = (
+        merged.pivot_table(index="producto", columns="month",
+                           values="quantity", aggfunc="sum", fill_value=0)
     )
+    return totals, per_product
 
 
-def _pl_pivot(df: pd.DataFrame, units: dict[str, int]) -> pd.DataFrame:
+def _pl_pivot(df: pd.DataFrame,
+              units_total: dict[str, int],
+              units_per_product: pd.DataFrame) -> pd.DataFrame:
     """Build a P&L DataFrame: rows = metrics, columns = months (by
     order_created_date — that's how the Google Sheet reports it)."""
     if df.empty or "order_created_date" not in df.columns:
@@ -206,19 +213,26 @@ def _pl_pivot(df: pd.DataFrame, units: dict[str, int]) -> pd.DataFrame:
 
     rows: list[dict] = []
 
-    # ── Unit sales (top row, from order_items) ─────────────────────
-    unit_row = {"Métrica": "Unidades vendidas"}
+    # ── Quantity: total + one row per product ──────────────────────
+    rows.append({"Métrica": "━ Quantity ━"})
+    qty_total = {"Métrica": "Quantity"}
     for m in all_months:
-        unit_row[m] = int(units.get(m, 0))
-    unit_row["Total"] = sum(unit_row[m] for m in all_months)
-    rows.append(unit_row)
+        qty_total[m] = int(units_total.get(m, 0))
+    qty_total["Total"] = sum(qty_total[m] for m in all_months)
+    rows.append(qty_total)
+    if not units_per_product.empty:
+        for prod, s in units_per_product.iterrows():
+            r = {"Métrica": f"   {prod}"}
+            for m in all_months:
+                r[m] = int(s.get(m, 0) or 0)
+            r["Total"] = sum(r[m] for m in all_months)
+            rows.append(r)
 
     for section_name, metrics in _PL_SECTIONS:
         rows.append({"Métrica": f"━ {section_name} ━"})
         section_detail_rows: list[dict] = []
         for label, cols in metrics:
             if cols == "SUM":
-                # Sum all preceding detail rows IN THIS SECTION
                 summed = {"Métrica": label}
                 for m in all_months:
                     summed[m] = round(sum(r.get(m, 0) or 0 for r in section_detail_rows), 2)
@@ -241,60 +255,76 @@ def _pl_pivot(df: pd.DataFrame, units: dict[str, int]) -> pd.DataFrame:
     return pl[["Métrica", *all_months, "Total"]]
 
 
-def _style_pl(pl: pd.DataFrame):
-    """Formatting: EUR symbol, bold section headers (dark), SUM rows (gray),
-    dark table header. Unidades vendidas renders as integer, not EUR."""
+def _render_pl_html(pl: pd.DataFrame) -> str:
+    """Render the P&L DataFrame as a styled HTML table. Streamlit's
+    st.dataframe strips most Styler CSS, so we build the HTML ourselves
+    and inject it with st.markdown(unsafe_allow_html=True) for full
+    control over row backgrounds and the dark/green header."""
     section_mask = pl["Métrica"].astype(str).str.startswith("━")
-    total_labels = {"Shipping (total)", "Fees (total)", "Advertising (total)",
-                    "Total settlement", "Unidades vendidas"}
-    sum_mask     = pl["Métrica"].isin(total_labels)
+    sum_labels   = {"Shipping", "Fees", "Adjustments", "Quantity",
+                    "Total settlement amount", "Net sales"}
+    sum_mask     = pl["Métrica"].astype(str).isin(sum_labels)
+    is_quantity_section = False  # tracked while iterating
 
-    def _row_style(row):
-        if section_mask.loc[row.name]:
-            return ["background-color: #1f2937; color: #ffffff; font-weight: 700;"
-                    for _ in row]
-        if sum_mask.loc[row.name]:
-            return ["background-color: #f3f4f6; font-weight: 700;" for _ in row]
-        return ["" for _ in row]
-
-    money_cols = [c for c in pl.columns if c != "Métrica"]
-    units_rows = pl.index[pl["Métrica"] == "Unidades vendidas"].tolist()
-    money_rows = [i for i in pl.index if i not in units_rows]
-
-    def _fmt_eur(v):
-        if v == "" or v is None:
-            return ""
-        try:
-            return f"€{float(v):,.2f}"
-        except (TypeError, ValueError):
-            return v
-
-    def _fmt_int(v):
-        if v == "" or v is None:
-            return ""
-        try:
-            return f"{int(float(v)):,}"
-        except (TypeError, ValueError):
-            return v
-
-    styled = (
-        pl.style
-          .apply(_row_style, axis=1)
-          .format(_fmt_eur, subset=(money_rows, money_cols))
-          .format(_fmt_int, subset=(units_rows, money_cols))
-          .set_table_styles([
-              {"selector": "thead tr th",
-               "props": "background-color: #111827; color: #ffffff; "
-                        "font-weight: 700; text-align: right;"},
-              {"selector": "thead tr th:first-child",
-               "props": "text-align: left;"},
-              {"selector": "tbody tr td",
-               "props": "text-align: right;"},
-              {"selector": "tbody tr td:first-child",
-               "props": "text-align: left;"},
-          ])
+    headers = list(pl.columns)
+    th = "".join(
+        f'<th style="padding:8px 12px;text-align:{"left" if h=="Métrica" else "right"};">'
+        f'{h}</th>' for h in headers
     )
-    return styled
+    thead = (
+        f'<thead><tr style="background:#000000;color:#00e676;'
+        f'font-weight:700;border-bottom:2px solid #00e676;">{th}</tr></thead>'
+    )
+
+    body_rows = []
+    in_quantity = False
+    for i, row in pl.iterrows():
+        label = str(row["Métrica"])
+        if section_mask.loc[i]:
+            in_quantity = (label == "━ Quantity ━")
+            tr_style = ("background:#1f2937;color:#ffffff;"
+                        "font-weight:700;")
+        elif sum_mask.loc[i]:
+            tr_style = "background:#e5e7eb;font-weight:700;"
+        else:
+            tr_style = ""
+
+        cells = []
+        for col in headers:
+            v = row[col]
+            if col == "Métrica":
+                cells.append(
+                    f'<td style="padding:6px 12px;text-align:left;">{label}</td>'
+                )
+                continue
+            if v == "" or v is None:
+                txt = ""
+            else:
+                try:
+                    n = float(v)
+                    # Integer formatting for Quantity section and the
+                    # Quantity total row itself
+                    if in_quantity or label == "Quantity":
+                        txt = f"{int(n):,}"
+                    else:
+                        txt = f"€{n:,.2f}"
+                except (TypeError, ValueError):
+                    txt = str(v)
+            cells.append(
+                f'<td style="padding:6px 12px;text-align:right;">{txt}</td>'
+            )
+        body_rows.append(f'<tr style="{tr_style}">{"".join(cells)}</tr>')
+
+    tbody = f'<tbody>{"".join(body_rows)}</tbody>'
+    html = (
+        '<div style="overflow-x:auto;border:1px solid #e5e7eb;'
+        'border-radius:6px;">'
+        '<table style="width:100%;border-collapse:collapse;'
+        'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;'
+        'font-size:13px;">'
+        f'{thead}{tbody}</table></div>'
+    )
+    return html
 
 
 def _load_order_items(order_ids: list[str]) -> pd.DataFrame:
@@ -512,18 +542,24 @@ def render_finance_page():
     ])
 
     with tab_pl:
-        units = _units_by_month(df)
-        pl = _pl_pivot(df, units)
+        units_total, units_per_product = _units_by_month(df)
+        pl = _pl_pivot(df, units_total, units_per_product)
         if pl.empty:
             st.info("Sin datos para pivotar.")
         else:
             st.caption(
                 "Agregado por **mes de la orden** (order_created_date). "
-                "**COGS no está aquí** — está en el tab 📦 Por producto. "
-                "**Ads externo** (gasto en TikTok Ads Manager) tampoco."
+                "**COGS no está aquí** — está en el tab 📦 Por producto."
             )
-            st.dataframe(_style_pl(pl), use_container_width=True, height=700,
-                         hide_index=True)
+            if sum(units_total.values()) == 0:
+                st.warning(
+                    "⚠️ Quantity = 0 en todos los meses. Significa que la "
+                    "tabla `tiktok_order_items` está vacía. Revisa que "
+                    "corriste la migración `003_tiktok_order_items.sql` en "
+                    "Supabase y que el último Sync mostró 'N line-items "
+                    "actualizados'."
+                )
+            st.markdown(_render_pl_html(pl), unsafe_allow_html=True)
             buf_pl = io.StringIO()
             pl.to_csv(buf_pl, index=False)
             st.download_button(
