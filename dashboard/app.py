@@ -4156,17 +4156,28 @@ def render_settings():
             if st.button("🔑 Exchange code & save to Supabase", key="tk_exchange"):
                 try:
                     from backend.tiktok_oauth import exchange_code_for_token, fetch_authorized_shops
-                    from backend.tiktok_tokens import save_tokens
+                    from backend.tiktok_tokens import save_tokens, get_tokens
                     data = exchange_code_for_token(tk_key, tk_secret, code_in_url)
                     access  = data.get("access_token", "")
                     refresh = data.get("refresh_token", "")
                     cipher  = data.get("shop_cipher") or data.get("shop_id") or ""
                     if not cipher and access:
-                        shops = fetch_authorized_shops(tk_key, tk_secret, access)
-                        if shops:
-                            cipher = shops[0].get("cipher") or shops[0].get("shop_cipher") or ""
-                    if save_tokens(access, refresh, cipher,
-                                   data.get("access_token_expire_in")):
+                        try:
+                            shops = fetch_authorized_shops(tk_key, tk_secret, access)
+                            if shops:
+                                cipher = shops[0].get("cipher") or shops[0].get("shop_cipher") or ""
+                        except Exception as exc:
+                            st.warning(f"fetch_authorized_shops falló: {exc}")
+                    # Safety: never overwrite a known-good cipher with empty.
+                    if not cipher:
+                        existing = get_tokens() or {}
+                        cipher = existing.get("shop_cipher") or ""
+                        if cipher:
+                            st.info("Cipher no vino en el exchange — conservando el que ya estaba en Supabase.")
+                    if not access or not refresh:
+                        st.error("Exchange no devolvió access/refresh — no se guardó nada.")
+                    elif save_tokens(access, refresh, cipher,
+                                     data.get("access_token_expire_in")):
                         st.success(
                             "✅ Token exchanged and saved to Supabase (tiktok_tokens). "
                             "El nuevo token incluye los scopes que acabas de autorizar. "
