@@ -76,44 +76,53 @@ def _dt_from_ts(ts) -> str | None:
 # TikTok's field names shift between versions; we try several per column and
 # fall back to None. The full payload is kept in `raw` so columns we miss
 # today can be backfilled later with a SQL update, no re-fetch needed.
+# Field names below come from the ACTUAL TikTok /statement_transactions
+# payload (verified 2026-10-28). Fields marked ⚠ don't exist on the
+# statement_transaction object — they live on the Order resource and
+# require a separate /order call to enrich. Left as None here.
 _FIELD_MAP: list[tuple[str, list[str], str]] = [
-    # (db_column, api_candidate_names, type: 'dec'|'int'|'str'|'date_ts')
+    # Order metadata ⚠ (not in finance payload — enrich via /order later)
     ("payment_id",                                   ["payment_id"], "str"),
-    ("status",                                       ["status", "statement_status"], "str"),
-    ("currency",                                     ["currency"], "str"),
+    ("status",                                       ["status"], "str"),
     ("sku_id",                                       ["sku_id"], "str"),
     ("quantity",                                     ["quantity"], "int"),
     ("product_name",                                 ["product_name"], "str"),
     ("sku_name",                                     ["sku_name"], "str"),
-    ("order_created_date",                           ["order_create_time", "order_created_time"], "date_ts"),
     ("order_delivery_date",                          ["order_delivery_time"], "date_ts"),
 
-    ("total_settlement_amount",                      ["settlement_amount", "total_settlement_amount"], "dec"),
-    ("net_sales",                                    ["net_sales_amount", "net_sales"], "dec"),
-    ("subtotal_before_discounts",                    ["subtotal_before_discounts"], "dec"),
-    ("seller_discounts",                             ["seller_discounts"], "dec"),
-    ("refund_subtotal_before_seller_discounts",      ["refund_subtotal_before_seller_discounts"], "dec"),
-    ("refund_of_seller_discounts",                   ["refund_of_seller_discounts"], "dec"),
+    # Verified ✅
+    ("currency",                                     ["currency"], "str"),
+    ("order_created_date",                           ["order_create_time"], "date_ts"),
 
-    ("shipping",                                     ["shipping_amount", "shipping"], "dec"),
-    ("tiktok_shop_shipping_fee",                     ["tiktok_shop_shipping_fee"], "dec"),
-    ("fulfilled_by_tiktok_shop_shipping_fee",        ["fulfilled_by_tiktok_shop_shipping_fee"], "dec"),
-    ("customer_shipping_fee",                        ["customer_shipping_fee"], "dec"),
-    ("refunded_customer_shipping_fee",               ["refunded_customer_shipping_fee"], "dec"),
-    ("tiktok_shop_shipping_incentive",               ["tiktok_shop_shipping_incentive"], "dec"),
+    # Totals (settlement) — verified ✅
+    ("total_settlement_amount",                      ["settlement_amount"], "dec"),
+    ("net_sales",                                    ["net_sales_amount", "revenue_amount"], "dec"),
+    ("subtotal_before_discounts",                    ["gross_sales_amount"], "dec"),
+    ("seller_discounts",                             ["seller_discount_amount"], "dec"),
+    ("refund_subtotal_before_seller_discounts",      ["gross_sales_refund_amount"], "dec"),
+    ("refund_of_seller_discounts",                   ["seller_discount_refund_amount"], "dec"),
+
+    # Shipping — verified ✅
+    ("shipping",                                     ["shipping_fee_amount"], "dec"),
+    ("tiktok_shop_shipping_fee",                     ["shipping_cost_amount"], "dec"),
+    ("fulfilled_by_tiktok_shop_shipping_fee",        ["fbt_shipping_cost_amount"], "dec"),
+    ("customer_shipping_fee",                        ["customer_shipping_fee_amount", "customer_paid_shipping_fee_amount"], "dec"),
+    ("refunded_customer_shipping_fee",               ["customer_paid_shipping_fee_refund_amount"], "dec"),
+    ("tiktok_shop_shipping_incentive",               ["promo_shipping_incentive_amount"], "dec"),
     ("tiktok_shop_shipping_incentive_refund",        ["tiktok_shop_shipping_incentive_refund"], "dec"),
-    ("shipping_subsidy",                             ["shipping_subsidy"], "dec"),
-    ("actual_return_shipping_fee",                   ["actual_return_shipping_fee"], "dec"),
-    ("shipping_fee_discount",                        ["shipping_fee_discount"], "dec"),
-    ("return_shipping_label_fee",                    ["return_shipping_label_fee"], "dec"),
-    ("return_shipping_fee_reimbursement",            ["return_shipping_fee_reimbursement"], "dec"),
-    ("fee_for_fbt_free_shipping",                    ["fee_for_fbt_free_shipping"], "dec"),
+    ("shipping_subsidy",                             ["shipping_fee_subsidy_amount"], "dec"),
+    ("actual_return_shipping_fee",                   ["actual_return_shipping_fee_amount"], "dec"),
+    ("shipping_fee_discount",                        ["shipping_cost_discount_amount"], "dec"),
+    ("return_shipping_label_fee",                    ["return_shipping_fee_amount"], "dec"),
+    ("return_shipping_fee_reimbursement",            ["refund_shipping_cost_discount_amount"], "dec"),
+    ("fee_for_fbt_free_shipping",                    ["fbt_fulfillment_fee_amount"], "dec"),
 
-    ("fees",                                         ["fee_amount", "fees"], "dec"),
-    ("tiktok_shop_commission_fee",                   ["tiktok_shop_commission_fee"], "dec"),
-    ("affiliate_commission",                         ["affiliate_commission"], "dec"),
-    ("affiliate_partner_commission",                 ["affiliate_partner_commission"], "dec"),
-    ("affiliate_shop_ads_commission",                ["affiliate_shop_ads_commission"], "dec"),
+    # Fees — verified ✅
+    ("fees",                                         ["fee_amount"], "dec"),
+    ("tiktok_shop_commission_fee",                   ["platform_commission_amount", "referral_fee_amount"], "dec"),
+    ("affiliate_commission",                         ["affiliate_commission_amount"], "dec"),
+    ("affiliate_partner_commission",                 ["affiliate_partner_commission_amount"], "dec"),
+    ("affiliate_shop_ads_commission",                ["affiliate_ads_commission_amount"], "dec"),
     ("epr_pay_on_behalf_service_fee",                ["epr_pay_on_behalf_service_fee"], "dec"),
     ("co_funded_promotion_seller_funded",            ["co_funded_promotion_seller_funded"], "dec"),
     ("smart_promotion_fee_tax",                      ["smart_promotion_fee_tax"], "dec"),
@@ -121,30 +130,33 @@ _FIELD_MAP: list[tuple[str, list[str], str]] = [
     ("affiliate_commission_refund",                  ["affiliate_commission_refund"], "dec"),
     ("affiliate_partner_shop_ads_commission",        ["affiliate_partner_shop_ads_commission"], "dec"),
     ("campaign_resource_fee",                        ["campaign_resource_fee"], "dec"),
-    ("tax_and_duty",                                 ["tax_and_duty"], "dec"),
+    ("tax_and_duty",                                 ["iva_vat_amount", "sales_tax_amount"], "dec"),
     ("smart_promotion_fee",                          ["smart_promotion_fee"], "dec"),
-    ("campaign_service_fee",                         ["campaign_service_fee"], "dec"),
+    ("campaign_service_fee",                         ["campaign_service_fee", "transaction_fee_amount"], "dec"),
     ("managed_service_plan_sales_tax",               ["managed_service_plan_sales_tax"], "dec"),
     ("managed_service_plan_per_order_fee",           ["managed_service_plan_per_order_fee"], "dec"),
     ("gmv_max_ad_fee",                               ["gmv_max_ad_fee"], "dec"),
     ("auto_post_shoppable_video_commission_fee",     ["auto_post_shoppable_video_commission_fee"], "dec"),
 
+    # Adjustments — verified ✅
     ("adjustment_amount",                            ["adjustment_amount"], "dec"),
     ("adjustment_reason",                            ["adjustment_reason"], "str"),
     ("related_order_id",                             ["related_order_id"], "str"),
 
-    ("customer_payment",                             ["customer_payment"], "dec"),
-    ("customer_refund",                              ["customer_refund"], "dec"),
+    # Customer flows — verified ✅
+    ("customer_payment",                             ["customer_payment_amount"], "dec"),
+    ("customer_refund",                              ["customer_refund_amount", "customer_order_refund_amount"], "dec"),
     ("seller_co_funded_voucher_discount",            ["seller_co_funded_voucher_discount"], "dec"),
     ("seller_co_funded_voucher_discount_refund",     ["seller_co_funded_voucher_discount_refund"], "dec"),
-    ("platform_discounts",                           ["platform_discounts"], "dec"),
-    ("platform_discounts_refund",                    ["platform_discounts_refund"], "dec"),
-    ("platform_co_funded_voucher_discounts",         ["platform_co_funded_voucher_discounts"], "dec"),
+    ("platform_discounts",                           ["platform_discount_amount"], "dec"),
+    ("platform_discounts_refund",                    ["platform_discount_refund_amount"], "dec"),
+    ("platform_co_funded_voucher_discounts",         ["platform_refund_subsidy_amount"], "dec"),
     ("platform_co_funded_voucher_discounts_refund",  ["platform_co_funded_voucher_discounts_refund"], "dec"),
-    ("customer_paid_shipping_fee_before_discounts",  ["customer_paid_shipping_fee_before_discounts"], "dec"),
+    ("customer_paid_shipping_fee_before_discounts",  ["customer_paid_shipping_fee_amount"], "dec"),
     ("seller_shipping_fee_discount",                 ["seller_shipping_fee_discount"], "dec"),
-    ("tiktok_shop_shipping_fee_discount_to_customer",["tiktok_shop_shipping_fee_discount_to_customer"], "dec"),
+    ("tiktok_shop_shipping_fee_discount_to_customer",["platform_shipping_fee_discount_amount"], "dec"),
 
+    # Logistics ⚠ (not in finance payload)
     ("estimated_chargeable_package_weight",          ["estimated_chargeable_package_weight"], "dec"),
     ("chargeable_package_weight",                    ["chargeable_package_weight"], "dec"),
     ("collection_methods",                           ["collection_methods"], "str"),

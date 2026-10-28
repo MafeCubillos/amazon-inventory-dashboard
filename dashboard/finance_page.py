@@ -117,18 +117,84 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ── P&L row structure (metric label, db columns to sum, sign) ────────
+# Mirrors the P&L / P&LBase tabs of the Google Sheet. Only rows derivable
+# from Finance data are here; COGS and Ads come from other sources.
+_PL_SECTIONS: list[tuple[str, list[tuple[str, list[str], int]]]] = [
+    ("GMV / Ventas", [
+        ("GMV incl VAT",                            ["subtotal_before_discounts"],              +1),
+        ("Seller discounts",                        ["seller_discounts"],                       +1),
+        ("Refund subtotal before seller discounts", ["refund_subtotal_before_seller_discounts"],+1),
+        ("Refund of seller discounts",              ["refund_of_seller_discounts"],             +1),
+        ("Net sales",                               ["net_sales"],                              +1),
+        ("Customer payment",                        ["customer_payment"],                       +1),
+        ("Customer refund",                         ["customer_refund"],                        +1),
+    ]),
+    ("Shipping", [
+        ("TikTok Shop shipping fee",                ["tiktok_shop_shipping_fee"],               +1),
+        ("Fulfilled by TikTok Shop shipping fee",   ["fulfilled_by_tiktok_shop_shipping_fee"],  +1),
+        ("Customer shipping fee",                   ["customer_shipping_fee"],                  +1),
+        ("Refunded customer shipping fee",          ["refunded_customer_shipping_fee"],         +1),
+        ("TikTok Shop shipping incentive",          ["tiktok_shop_shipping_incentive"],         +1),
+        ("Shipping subsidy",                        ["shipping_subsidy"],                       +1),
+        ("Actual return shipping fee",              ["actual_return_shipping_fee"],             +1),
+        ("Shipping fee discount",                   ["shipping_fee_discount"],                  +1),
+        ("Fee for FBT free shipping",               ["fee_for_fbt_free_shipping"],              +1),
+        ("Shipping (total)",                        ["shipping"],                               +1),
+    ]),
+    ("Fees", [
+        ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"],             +1),
+        ("Affiliate commission",                    ["affiliate_commission"],                   +1),
+        ("Affiliate partner commission",            ["affiliate_partner_commission"],           +1),
+        ("Affiliate shop ads commission",           ["affiliate_shop_ads_commission"],          +1),
+        ("Transaction / Campaign service fee",      ["campaign_service_fee"],                   +1),
+        ("Tax and duty / VAT",                      ["tax_and_duty"],                           +1),
+        ("Fees (total)",                            ["fees"],                                   +1),
+    ]),
+    ("Resultado", [
+        ("Adjustments",                             ["adjustment_amount"],                      +1),
+        ("Total settlement",                        ["total_settlement_amount"],                +1),
+    ]),
+]
+
+
+def _pl_pivot(df: pd.DataFrame) -> pd.DataFrame:
+    """Build a P&L-style DataFrame: rows = metrics, columns = months."""
+    if df.empty or "statement_date" not in df.columns:
+        return pd.DataFrame()
+    dfx = df.copy()
+    dfx["month"] = pd.to_datetime(dfx["statement_date"]).dt.strftime("%Y-%m")
+    rows: list[dict] = []
+    for section_name, metrics in _PL_SECTIONS:
+        rows.append({"Métrica": f"━ {section_name} ━"})  # section header
+        for label, cols, sign in metrics:
+            present = [c for c in cols if c in dfx.columns]
+            if not present:
+                continue
+            series = pd.to_numeric(dfx[present[0]], errors="coerce").fillna(0) * sign
+            by_month = series.groupby(dfx["month"]).sum()
+            row = {"Métrica": label}
+            for m, v in by_month.items():
+                row[m] = round(float(v), 2)
+            row["Total"] = round(float(by_month.sum()), 2)
+            rows.append(row)
+    pl = pd.DataFrame(rows).fillna("")
+    months = sorted([c for c in pl.columns if c not in ("Métrica", "Total")])
+    return pl[["Métrica", *months, "Total"]]
+
+
 def render_finance_page():
     """Streamlit page: pulls TikTok finance transactions and exports to CSV."""
     st.markdown("#### 💰 Finance-TikTok")
     st.caption(
         "Transaction-level finance data from TikTok Shop (equivalent to the "
-        "Order details sheet of the Finance Center Excel export). Use **Export CSV** "
-        "to paste directly into your P&L Google Sheet."
+        "Order details sheet of the Finance Center Excel export)."
     )
 
-    # ── Date range ──────────────────────────────────────────────
+    # ── Date range + Sync ──────────────────────────────────────
     today = date.today()
-    default_start = today.replace(day=1)
+    default_start = today.replace(day=1) - pd.DateOffset(months=2)
+    default_start = default_start.date()
     col_a, col_b, col_c = st.columns([2, 2, 1])
     with col_a:
         start = st.date_input("Desde", value=default_start, key="fin_start")
@@ -140,7 +206,6 @@ def render_finance_page():
         sync_clicked = st.button("🔄 Sync from TikTok", type="primary",
                                  use_container_width=True)
 
-    # ── Sync ────────────────────────────────────────────────────
     if sync_clicked:
         with st.spinner("Fetching from TikTok Finance API…"):
             from backend.fetchers.tiktok_finance import fetch_tiktok_finance
@@ -154,7 +219,6 @@ def render_finance_page():
             for w in warnings:
                 st.text(w)
 
-    # ── Load + display ──────────────────────────────────────────
     df = _load_transactions(start, end)
     display_df = _order_details_df(df)
 
@@ -179,15 +243,37 @@ def render_finance_page():
         )
         return
 
-    # ── CSV export (same columns as Order details) ──────────────
-    buf = io.StringIO()
-    display_df.to_csv(buf, index=False)
-    st.download_button(
-        "⬇️ Export CSV (Order details format)",
-        data=buf.getvalue().encode("utf-8-sig"),
-        file_name=f"tiktok_order_details_{start}_{end}.csv",
-        mime="text/csv",
-    )
+    # ── Two tabs: P&L view and raw table ───────────────────────
+    tab_pl, tab_raw = st.tabs(["📊 P&L por mes", "📋 Tabla cruda (Order details)"])
 
-    # ── Preview table ───────────────────────────────────────────
-    st.dataframe(display_df, use_container_width=True, height=600, hide_index=True)
+    with tab_pl:
+        pl = _pl_pivot(df)
+        if pl.empty:
+            st.info("Sin datos para pivotar.")
+        else:
+            st.caption(
+                "Agregado por mes de statement_date. **COGS, Ads y Advertising cost "
+                "no están aquí** — vienen de otras fuentes y los sumas en el Sheet."
+            )
+            st.dataframe(pl, use_container_width=True, height=700, hide_index=True)
+            # CSV export of P&L
+            buf_pl = io.StringIO()
+            pl.to_csv(buf_pl, index=False)
+            st.download_button(
+                "⬇️ Export P&L CSV",
+                data=buf_pl.getvalue().encode("utf-8-sig"),
+                file_name=f"tiktok_pl_{start}_{end}.csv",
+                mime="text/csv",
+            )
+
+    with tab_raw:
+        # CSV export (same columns as Order details) for pasting into Sheet
+        buf = io.StringIO()
+        display_df.to_csv(buf, index=False)
+        st.download_button(
+            "⬇️ Export CSV (Order details format)",
+            data=buf.getvalue().encode("utf-8-sig"),
+            file_name=f"tiktok_order_details_{start}_{end}.csv",
+            mime="text/csv",
+        )
+        st.dataframe(display_df, use_container_width=True, height=600, hide_index=True)
