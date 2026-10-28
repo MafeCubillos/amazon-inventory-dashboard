@@ -166,26 +166,26 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, list[str] | str]]]] = [
 ]
 
 
-def _units_by_month(fin_df: pd.DataFrame) -> tuple[dict[str, int], pd.DataFrame]:
-    """Returns:
-       - {YYYY-MM: total units} across all products
-       - DataFrame with rows = product_name, cols = month, values = units
-    Both derived from tiktok_order_items joined to fin_df by order_id."""
+def _units_by_month(fin_df: pd.DataFrame,
+                    month_source: str = "order_created_date"
+                    ) -> tuple[dict[str, int], pd.DataFrame]:
+    """Returns totals and per-product unit counts by month. month_source
+    picks which date column drives the pivot."""
     empty = ({}, pd.DataFrame())
-    if fin_df.empty:
+    if fin_df.empty or month_source not in fin_df.columns:
         return empty
     order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
     items = _load_order_items(order_ids)
     if items.empty:
         return empty
     fin_small = (
-        fin_df[["order_adjustment_id", "order_created_date"]]
+        fin_df[["order_adjustment_id", month_source]]
         .rename(columns={"order_adjustment_id": "order_id"})
         .copy()
     )
     fin_small["order_id"] = fin_small["order_id"].astype(str)
     merged = items.merge(fin_small, on="order_id", how="left")
-    merged["month"] = pd.to_datetime(merged["order_created_date"]).dt.strftime("%Y-%m")
+    merged["month"] = pd.to_datetime(merged[month_source]).dt.strftime("%Y-%m")
     merged = merged.dropna(subset=["month"])
     totals = merged.groupby("month")["quantity"].sum().astype(int).to_dict()
 
@@ -202,13 +202,14 @@ def _units_by_month(fin_df: pd.DataFrame) -> tuple[dict[str, int], pd.DataFrame]
 
 def _pl_pivot(df: pd.DataFrame,
               units_total: dict[str, int],
-              units_per_product: pd.DataFrame) -> pd.DataFrame:
-    """Build a P&L DataFrame: rows = metrics, columns = months (by
-    order_created_date — that's how the Google Sheet reports it)."""
-    if df.empty or "order_created_date" not in df.columns:
+              units_per_product: pd.DataFrame,
+              month_source: str = "order_created_date") -> pd.DataFrame:
+    """Build a P&L DataFrame: rows = metrics, columns = months.
+    month_source: 'order_created_date' or 'statement_date'."""
+    if df.empty or month_source not in df.columns:
         return pd.DataFrame()
     dfx = df.copy()
-    dfx["month"] = pd.to_datetime(dfx["order_created_date"]).dt.strftime("%Y-%m")
+    dfx["month"] = pd.to_datetime(dfx[month_source]).dt.strftime("%Y-%m")
     all_months = sorted(dfx["month"].dropna().unique().tolist())
 
     rows: list[dict] = []
@@ -542,13 +543,21 @@ def render_finance_page():
     ])
 
     with tab_pl:
-        units_total, units_per_product = _units_by_month(df)
-        pl = _pl_pivot(df, units_total, units_per_product)
+        month_source_label = st.radio(
+            "Agrupar por mes de:",
+            ["Order date", "Statement date"],
+            horizontal=True, key="pl_month_source",
+        )
+        month_source = ("order_created_date"
+                        if month_source_label == "Order date"
+                        else "statement_date")
+        units_total, units_per_product = _units_by_month(df, month_source)
+        pl = _pl_pivot(df, units_total, units_per_product, month_source)
         if pl.empty:
             st.info("Sin datos para pivotar.")
         else:
             st.caption(
-                "Agregado por **mes de la orden** (order_created_date). "
+                f"Agregado por **{month_source_label.lower()}**. "
                 "**COGS no está aquí** — está en el tab 📦 Por producto."
             )
             if sum(units_total.values()) == 0:
