@@ -135,7 +135,9 @@ _FIELD_MAP: list[tuple[str, list[str], str]] = [
     ("campaign_service_fee",                         ["campaign_service_fee", "transaction_fee_amount"], "dec"),
     ("managed_service_plan_sales_tax",               ["managed_service_plan_sales_tax"], "dec"),
     ("managed_service_plan_per_order_fee",           ["managed_service_plan_per_order_fee"], "dec"),
-    ("gmv_max_ad_fee",                               ["gmv_max_ad_fee"], "dec"),
+    ("gmv_max_ad_fee",                               ["gmv_max_ad_fee", "gmv_payment_for_tiktok_ads_amount",
+                                                      "tiktok_ads_amount", "ads_payment_amount",
+                                                      "shop_ads_payment_amount"], "dec"),
     ("auto_post_shoppable_video_commission_fee",     ["auto_post_shoppable_video_commission_fee"], "dec"),
 
     # Adjustments — verified ✅

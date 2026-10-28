@@ -151,6 +151,9 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, list[str], int]]]] = [
         ("Tax and duty / VAT",                      ["tax_and_duty"],                           +1),
         ("Fees (total)",                            ["fees"],                                   +1),
     ]),
+    ("Advertising", [
+        ("GMV Payment for TikTok Ads",              ["gmv_max_ad_fee"],                         +1),
+    ]),
     ("Resultado", [
         ("Adjustments",                             ["adjustment_amount"],                      +1),
         ("Total settlement",                        ["total_settlement_amount"],                +1),
