@@ -901,7 +901,7 @@ def render_sidebar():
                      ("🏷️", "Labels",         "labels"),
                      ("🏠", "Local Stock",    "local"),
                      ("🎵", "TikTok",         "tiktok"),
-                     ("💰", "Finance",        "finance"),
+                     ("💰", "Finance-TikTok", "finance"),
                      ("📈", "Forecast",       "forecast"),
                      ("📊", "Forecast Builder", "forecast_builder"),
                      ("⚙️", "Settings",       "settings")]

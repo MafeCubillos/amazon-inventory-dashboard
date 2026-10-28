@@ -119,7 +119,7 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def render_finance_page():
     """Streamlit page: pulls TikTok finance transactions and exports to CSV."""
-    st.markdown("#### 💰 TikTok Finance")
+    st.markdown("#### 💰 Finance-TikTok")
     st.caption(
         "Transaction-level finance data from TikTok Shop (equivalent to the "
         "Order details sheet of the Finance Center Excel export). Use **Export CSV** "
