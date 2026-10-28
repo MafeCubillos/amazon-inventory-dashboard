@@ -340,93 +340,16 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     logger.info("tiktok_finance  %d statements, %d transactions, %d upserted",
                 len(statements), total_tx, upserted)
 
-    # ── Step 3: pull Payments endpoint (Top-up ads balance, Bill deduction
-    #            for negative balance, etc.) — these are account-level
-    #            balance adjustments that /statements_transactions omits ──
-    # Keep this bounded: if the endpoint doesn't exist, every request
-    # takes ~1s to fail. 20 pages × 50 = 1000 payments max — plenty for
-    # 3 months.
-    payments: list[dict] = []
-    page_token = ""
-    for page_i in range(10):
-        qs = {
-            "page_size":       "50",
-            "create_time_ge":  str(start_ts),
-            "create_time_lt":  str(end_ts),
-            "sort_field":      "create_time",
-            "sort_order":      "DESC",
-        }
-        if page_token:
-            qs["page_token"] = page_token
-        try:
-            # Short timeout and inline httpx call — if the endpoint
-            # doesn't exist, fail fast instead of blocking the sync.
-            p = {
-                "app_key":     app_key,
-                "timestamp":   str(int(time.time())),
-                "shop_cipher": shop_cipher,
-                "version":     "202309",
-                **qs,
-            }
-            p["sign"] = _sign(app_secret, _PAYMENTS_PATH, p)
-            r = httpx.get(
-                _BASE_URL + _PAYMENTS_PATH, params=p,
-                headers={"x-tts-access-token": access_token,
-                         "content-type": "application/json"},
-                timeout=10,
-            )
-        except Exception as exc:
-            warnings.append(f"Payments HTTP error p{page_i}: {exc}")
-            break
-        if r.status_code != 200:
-            warnings.append(f"Payments HTTP {r.status_code}: {r.text[:200]}")
-            break
-        body = r.json()
-        if body.get("code") != 0:
-            warnings.append(f"Payments API code {body.get('code')}: {body.get('message')}")
-            break
-        data = body.get("data") or {}
-        payments.extend(data.get("payments") or [])
-        page_token = data.get("next_page_token") or ""
-        if not page_token:
-            break
-
-    warnings.append(f"Payments fetched: {len(payments)}.")
-    pay_upserted = 0
-    for pay in payments:
-        pay_id   = _str(pay.get("id") or pay.get("payment_id"))
-        pay_type = _str(pay.get("type") or pay.get("payment_type")) or "PAYMENT"
-        if not pay_id:
-            continue
-        pay_date = _dt_from_ts(pay.get("payment_time") or pay.get("statement_time"))
-        settlement = _dec(pay.get("settlement_amount")
-                          or pay.get("net_amount")
-                          or pay.get("amount"))
-        row = {
-            # Store payment as a pseudo-statement so the UI can treat it
-            # uniformly. statement_id = payment_id, order_adjustment_id
-            # = payment_id so the unique key stays unique.
-            "statement_id":        pay_id,
-            "order_adjustment_id": pay_id,
-            "type":                pay_type,
-            "shop_cipher":         shop_cipher,
-            "statement_date":      pay_date,
-            # Mirror the amount in the raw fields the pivot already knows,
-            # so the Adjustments section can read it from settlement_amount.
-            "raw": {**pay,
-                    "settlement_amount": str(settlement) if settlement is not None else "0",
-                    "type": pay_type},
-            "fetched_at":          datetime.now(timezone.utc).isoformat(),
-            "total_settlement_amount": settlement,
-        }
-        try:
-            db_admin.table("tiktok_finance_transactions").upsert(
-                row, on_conflict="statement_id,order_adjustment_id,type"
-            ).execute()
-            pay_upserted += 1
-        except Exception as exc:
-            warnings.append(f"Save failed payment={pay_id}: {exc}")
-
-    warnings.append(f"Payments upserted: {pay_upserted}.")
-    upserted += pay_upserted
+    # NOTE: /finance/202309/payments turned out to return bank payouts
+    # (money paid to merchant's bank account) with no amount broken down
+    # by category — NOT the Top-up ads / Bill deduction transactions we
+    # need. Those live inside specific statement_ids that /statements
+    # doesn't surface. Leaving a gap in GMV Payment for TikTok Ads /
+    # Bill deduction P&L rows until we find the right endpoint.
+    warnings.append(
+        "⚠️ GMV Payment for TikTok Ads and Bill deduction are NOT in the "
+        "sync yet — the Payments API endpoint returned payouts, not those "
+        "transactions. Workaround: input monthly ad spend manually or "
+        "re-sync when the right endpoint is identified."
+    )
     return upserted, warnings
