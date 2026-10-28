@@ -4153,20 +4153,27 @@ def render_settings():
 
         if code_in_url and tk_key and tk_secret:
             st.info(f"Detected authorization code in URL: `{code_in_url[:20]}…`")
-            if st.button("🔑 Exchange code for token", key="tk_exchange"):
+            if st.button("🔑 Exchange code & save to Supabase", key="tk_exchange"):
                 try:
-                    from backend.tiktok_oauth import exchange_code_for_token
+                    from backend.tiktok_oauth import exchange_code_for_token, fetch_authorized_shops
+                    from backend.tiktok_tokens import save_tokens
                     data = exchange_code_for_token(tk_key, tk_secret, code_in_url)
-                    st.success("Token exchange successful!")
-                    st.code(f"""Copy these values into Streamlit Secrets:
-
-TIKTOK_ACCESS_TOKEN = "{data.get('access_token', '')}"
-TIKTOK_REFRESH_TOKEN = "{data.get('refresh_token', '')}"
-TIKTOK_SHOP_CIPHER = "{data.get('shop_cipher') or data.get('shop_id') or ''}"
-
-Access token expires in: {data.get('access_token_expire_in')} seconds""",
-                             language="toml")
-                    st.warning("After adding these to Streamlit Secrets, reboot the app.")
+                    access  = data.get("access_token", "")
+                    refresh = data.get("refresh_token", "")
+                    cipher  = data.get("shop_cipher") or data.get("shop_id") or ""
+                    if not cipher and access:
+                        shops = fetch_authorized_shops(tk_key, tk_secret, access)
+                        if shops:
+                            cipher = shops[0].get("cipher") or shops[0].get("shop_cipher") or ""
+                    if save_tokens(access, refresh, cipher,
+                                   data.get("access_token_expire_in")):
+                        st.success(
+                            "✅ Token exchanged and saved to Supabase (tiktok_tokens). "
+                            "El nuevo token incluye los scopes que acabas de autorizar. "
+                            "Ya puedes volver a Finance-TikTok y darle Sync."
+                        )
+                    else:
+                        st.error("Exchange ok but save to Supabase failed — revisa logs.")
                 except Exception as exc:
                     st.error(f"Exchange failed: {exc}")
 
