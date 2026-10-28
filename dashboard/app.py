@@ -901,6 +901,7 @@ def render_sidebar():
                      ("🏷️", "Labels",         "labels"),
                      ("🏠", "Local Stock",    "local"),
                      ("🎵", "TikTok",         "tiktok"),
+                     ("💰", "Finance",        "finance"),
                      ("📈", "Forecast",       "forecast"),
                      ("📊", "Forecast Builder", "forecast_builder"),
                      ("⚙️", "Settings",       "settings")]
@@ -4663,6 +4664,11 @@ elif page == "local":
 # ════════ PAGE: TIKTOK ════════
 elif page == "tiktok":
     render_tiktok_page(rows)
+
+# ════════ PAGE: FINANCE ════════
+elif page == "finance":
+    from dashboard.finance_page import render_finance_page
+    render_finance_page()
 
 # ════════ PAGE: FORECAST ════════
 elif page == "forecast":
