@@ -93,14 +93,23 @@ _ORDER_DETAILS_COLUMNS: list[tuple[str, str]] = [
 
 
 def _load_transactions(start: date, end: date) -> pd.DataFrame:
+    """Load finance rows whose ORDER was placed in [start, end].
+    Also includes rows with no order_created_date (adjustments) whose
+    statement_date falls in the window — so numbers don't disappear."""
     from backend.database import db_admin
+    s, e = start.isoformat(), end.isoformat()
+    # Supabase .or_() = OR of filters; we want:
+    #   order_created_date BETWEEN s AND e
+    #   OR (order_created_date IS NULL AND statement_date BETWEEN s AND e)
     rows = (
         db_admin.table("tiktok_finance_transactions")
         .select("*")
-        .gte("statement_date", start.isoformat())
-        .lte("statement_date", end.isoformat())
-        .order("statement_date", desc=True)
-        .limit(10000)
+        .or_(
+            f"and(order_created_date.gte.{s},order_created_date.lte.{e}),"
+            f"and(order_created_date.is.null,statement_date.gte.{s},statement_date.lte.{e})"
+        )
+        .order("order_created_date", desc=True)
+        .limit(50000)
         .execute()
         .data
     ) or []
@@ -117,72 +126,175 @@ def _order_details_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ── P&L row structure (metric label, db columns to sum, sign) ────────
-# Mirrors the P&L / P&LBase tabs of the Google Sheet. Only rows derivable
-# from Finance data are here; COGS and Ads come from other sources.
-_PL_SECTIONS: list[tuple[str, list[tuple[str, list[str], int]]]] = [
-    ("GMV / Ventas", [
-        ("GMV incl VAT",                            ["subtotal_before_discounts"],              +1),
-        ("Seller discounts",                        ["seller_discounts"],                       +1),
-        ("Refund subtotal before seller discounts", ["refund_subtotal_before_seller_discounts"],+1),
-        ("Refund of seller discounts",              ["refund_of_seller_discounts"],             +1),
-        ("Net sales",                               ["net_sales"],                              +1),
-        ("Customer payment",                        ["customer_payment"],                       +1),
-        ("Customer refund",                         ["customer_refund"],                        +1),
+# ── P&L row structure (metric label, db columns to sum) ────────────
+# Each section has detail rows and ends with a computed total row.
+# Mirrors the P&L / P&LBase tabs of the Google Sheet.
+# Rows marked SUM = sum of the detail rows above (computed, not from a column).
+_PL_SECTIONS: list[tuple[str, list[tuple[str, list[str] | str]]]] = [
+    ("Ventas", [
+        ("GMV incl VAT",                            ["subtotal_before_discounts"]),
+        ("Seller discounts",                        ["seller_discounts"]),
+        ("Refund subtotal before seller discounts", ["refund_subtotal_before_seller_discounts"]),
+        ("Refund of seller discounts",              ["refund_of_seller_discounts"]),
+        ("Net sales",                               ["net_sales"]),
+        ("Customer payment",                        ["customer_payment"]),
+        ("Customer refund",                         ["customer_refund"]),
     ]),
     ("Shipping", [
-        ("TikTok Shop shipping fee",                ["tiktok_shop_shipping_fee"],               +1),
-        ("Fulfilled by TikTok Shop shipping fee",   ["fulfilled_by_tiktok_shop_shipping_fee"],  +1),
-        ("Customer shipping fee",                   ["customer_shipping_fee"],                  +1),
-        ("Refunded customer shipping fee",          ["refunded_customer_shipping_fee"],         +1),
-        ("TikTok Shop shipping incentive",          ["tiktok_shop_shipping_incentive"],         +1),
-        ("Shipping subsidy",                        ["shipping_subsidy"],                       +1),
-        ("Actual return shipping fee",              ["actual_return_shipping_fee"],             +1),
-        ("Shipping fee discount",                   ["shipping_fee_discount"],                  +1),
-        ("Fee for FBT free shipping",               ["fee_for_fbt_free_shipping"],              +1),
-        ("Shipping (total)",                        ["shipping"],                               +1),
+        ("TikTok Shop shipping fee",                ["tiktok_shop_shipping_fee"]),
+        ("Fulfilled by TikTok Shop shipping fee",   ["fulfilled_by_tiktok_shop_shipping_fee"]),
+        ("Customer shipping fee",                   ["customer_shipping_fee"]),
+        ("Refunded customer shipping fee",          ["refunded_customer_shipping_fee"]),
+        ("TikTok Shop shipping incentive",          ["tiktok_shop_shipping_incentive"]),
+        ("Shipping subsidy",                        ["shipping_subsidy"]),
+        ("Actual return shipping fee",              ["actual_return_shipping_fee"]),
+        ("Shipping fee discount",                   ["shipping_fee_discount"]),
+        ("Fee for FBT free shipping",               ["fee_for_fbt_free_shipping"]),
+        ("Shipping (total)",                        "SUM"),
     ]),
     ("Fees", [
-        ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"],             +1),
-        ("Affiliate commission",                    ["affiliate_commission"],                   +1),
-        ("Affiliate partner commission",            ["affiliate_partner_commission"],           +1),
-        ("Transaction / Campaign service fee",      ["campaign_service_fee"],                   +1),
-        ("Tax and duty / VAT",                      ["tax_and_duty"],                           +1),
-        ("Fees (total)",                            ["fees"],                                   +1),
+        ("TikTok Shop commission fee",              ["tiktok_shop_commission_fee"]),
+        ("Affiliate commission",                    ["affiliate_commission"]),
+        ("Affiliate partner commission",            ["affiliate_partner_commission"]),
+        ("Transaction / Campaign service fee",      ["campaign_service_fee"]),
+        ("Tax and duty / VAT",                      ["tax_and_duty"]),
+        ("Fees (total)",                            "SUM"),
     ]),
     ("Advertising", [
-        ("GMV Payment for TikTok Ads",              ["affiliate_shop_ads_commission"],          +1),
+        ("GMV Payment for TikTok Ads",              ["affiliate_shop_ads_commission"]),
+        ("Advertising (total)",                     "SUM"),
     ]),
     ("Resultado", [
-        ("Adjustments",                             ["adjustment_amount"],                      +1),
-        ("Total settlement",                        ["total_settlement_amount"],                +1),
+        ("Adjustments",                             ["adjustment_amount"]),
+        ("Total settlement",                        ["total_settlement_amount"]),
     ]),
 ]
 
 
-def _pl_pivot(df: pd.DataFrame) -> pd.DataFrame:
-    """Build a P&L-style DataFrame: rows = metrics, columns = months."""
-    if df.empty or "statement_date" not in df.columns:
+def _units_by_month(fin_df: pd.DataFrame) -> dict[str, int]:
+    """Return {YYYY-MM: unit count} from tiktok_order_items joined to the
+    orders currently loaded in fin_df (by order_created_date)."""
+    if fin_df.empty:
+        return {}
+    order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
+    items = _load_order_items(order_ids)
+    if items.empty:
+        return {}
+    # month comes from the finance row's order_created_date
+    fin_small = (
+        fin_df[["order_adjustment_id", "order_created_date"]]
+        .rename(columns={"order_adjustment_id": "order_id"})
+        .copy()
+    )
+    fin_small["order_id"] = fin_small["order_id"].astype(str)
+    merged = items.merge(fin_small, on="order_id", how="left")
+    merged["month"] = pd.to_datetime(merged["order_created_date"]).dt.strftime("%Y-%m")
+    return (
+        merged.dropna(subset=["month"])
+              .groupby("month")["quantity"].sum().astype(int).to_dict()
+    )
+
+
+def _pl_pivot(df: pd.DataFrame, units: dict[str, int]) -> pd.DataFrame:
+    """Build a P&L DataFrame: rows = metrics, columns = months (by
+    order_created_date — that's how the Google Sheet reports it)."""
+    if df.empty or "order_created_date" not in df.columns:
         return pd.DataFrame()
     dfx = df.copy()
-    dfx["month"] = pd.to_datetime(dfx["statement_date"]).dt.strftime("%Y-%m")
+    dfx["month"] = pd.to_datetime(dfx["order_created_date"]).dt.strftime("%Y-%m")
+    all_months = sorted(dfx["month"].dropna().unique().tolist())
+
     rows: list[dict] = []
+
+    # ── Unit sales (top row, from order_items) ─────────────────────
+    unit_row = {"Métrica": "Unidades vendidas"}
+    for m in all_months:
+        unit_row[m] = int(units.get(m, 0))
+    unit_row["Total"] = sum(unit_row[m] for m in all_months)
+    rows.append(unit_row)
+
     for section_name, metrics in _PL_SECTIONS:
-        rows.append({"Métrica": f"━ {section_name} ━"})  # section header
-        for label, cols, sign in metrics:
+        rows.append({"Métrica": f"━ {section_name} ━"})
+        section_detail_rows: list[dict] = []
+        for label, cols in metrics:
+            if cols == "SUM":
+                # Sum all preceding detail rows IN THIS SECTION
+                summed = {"Métrica": label}
+                for m in all_months:
+                    summed[m] = round(sum(r.get(m, 0) or 0 for r in section_detail_rows), 2)
+                summed["Total"] = round(sum(summed[m] for m in all_months), 2)
+                rows.append(summed)
+                continue
             present = [c for c in cols if c in dfx.columns]
             if not present:
                 continue
-            series = pd.to_numeric(dfx[present[0]], errors="coerce").fillna(0) * sign
-            by_month = series.groupby(dfx["month"]).sum()
+            series = pd.to_numeric(dfx[present[0]], errors="coerce").fillna(0)
+            by_month = series.groupby(dfx["month"]).sum().to_dict()
             row = {"Métrica": label}
-            for m, v in by_month.items():
-                row[m] = round(float(v), 2)
-            row["Total"] = round(float(by_month.sum()), 2)
+            for m in all_months:
+                row[m] = round(float(by_month.get(m, 0.0)), 2)
+            row["Total"] = round(sum(row[m] for m in all_months), 2)
             rows.append(row)
+            section_detail_rows.append(row)
+
     pl = pd.DataFrame(rows).fillna("")
-    months = sorted([c for c in pl.columns if c not in ("Métrica", "Total")])
-    return pl[["Métrica", *months, "Total"]]
+    return pl[["Métrica", *all_months, "Total"]]
+
+
+def _style_pl(pl: pd.DataFrame):
+    """Formatting: EUR symbol, bold section headers (dark), SUM rows (gray),
+    dark table header. Unidades vendidas renders as integer, not EUR."""
+    section_mask = pl["Métrica"].astype(str).str.startswith("━")
+    total_labels = {"Shipping (total)", "Fees (total)", "Advertising (total)",
+                    "Total settlement", "Unidades vendidas"}
+    sum_mask     = pl["Métrica"].isin(total_labels)
+
+    def _row_style(row):
+        if section_mask.loc[row.name]:
+            return ["background-color: #1f2937; color: #ffffff; font-weight: 700;"
+                    for _ in row]
+        if sum_mask.loc[row.name]:
+            return ["background-color: #f3f4f6; font-weight: 700;" for _ in row]
+        return ["" for _ in row]
+
+    money_cols = [c for c in pl.columns if c != "Métrica"]
+    units_rows = pl.index[pl["Métrica"] == "Unidades vendidas"].tolist()
+    money_rows = [i for i in pl.index if i not in units_rows]
+
+    def _fmt_eur(v):
+        if v == "" or v is None:
+            return ""
+        try:
+            return f"€{float(v):,.2f}"
+        except (TypeError, ValueError):
+            return v
+
+    def _fmt_int(v):
+        if v == "" or v is None:
+            return ""
+        try:
+            return f"{int(float(v)):,}"
+        except (TypeError, ValueError):
+            return v
+
+    styled = (
+        pl.style
+          .apply(_row_style, axis=1)
+          .format(_fmt_eur, subset=(money_rows, money_cols))
+          .format(_fmt_int, subset=(units_rows, money_cols))
+          .set_table_styles([
+              {"selector": "thead tr th",
+               "props": "background-color: #111827; color: #ffffff; "
+                        "font-weight: 700; text-align: right;"},
+              {"selector": "thead tr th:first-child",
+               "props": "text-align: left;"},
+              {"selector": "tbody tr td",
+               "props": "text-align: right;"},
+              {"selector": "tbody tr td:first-child",
+               "props": "text-align: left;"},
+          ])
+    )
+    return styled
 
 
 def _load_order_items(order_ids: list[str]) -> pd.DataFrame:
@@ -400,16 +512,18 @@ def render_finance_page():
     ])
 
     with tab_pl:
-        pl = _pl_pivot(df)
+        units = _units_by_month(df)
+        pl = _pl_pivot(df, units)
         if pl.empty:
             st.info("Sin datos para pivotar.")
         else:
             st.caption(
-                "Agregado por mes de statement_date. **COGS, Ads y Advertising cost "
-                "no están aquí** — vienen de otras fuentes y los sumas en el Sheet."
+                "Agregado por **mes de la orden** (order_created_date). "
+                "**COGS no está aquí** — está en el tab 📦 Por producto. "
+                "**Ads externo** (gasto en TikTok Ads Manager) tampoco."
             )
-            st.dataframe(pl, use_container_width=True, height=700, hide_index=True)
-            # CSV export of P&L
+            st.dataframe(_style_pl(pl), use_container_width=True, height=700,
+                         hide_index=True)
             buf_pl = io.StringIO()
             pl.to_csv(buf_pl, index=False)
             st.download_button(
