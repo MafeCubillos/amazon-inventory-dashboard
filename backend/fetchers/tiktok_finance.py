@@ -337,9 +337,12 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     # ── Step 3: pull Payments endpoint (Top-up ads balance, Bill deduction
     #            for negative balance, etc.) — these are account-level
     #            balance adjustments that /statements_transactions omits ──
+    # Keep this bounded: if the endpoint doesn't exist, every request
+    # takes ~1s to fail. 20 pages × 50 = 1000 payments max — plenty for
+    # 3 months.
     payments: list[dict] = []
     page_token = ""
-    for page_i in range(100):
+    for page_i in range(20):
         qs = {
             "page_size":       "50",
             "payment_time_ge": str(start_ts),

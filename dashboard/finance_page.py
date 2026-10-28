@@ -682,22 +682,34 @@ def render_finance_page():
 
     if sync_clicked:
         days = max((today - start).days + 1, 30)
-        with st.spinner("Fetching from TikTok Finance API…"):
+        progress = st.empty()
+        warnings: list[str] = []
+
+        progress.info("⏳ Paso 1/2: Fetching finance statements + transactions + payments… (puede tomar 1-3 min)")
+        try:
             from backend.fetchers.tiktok_finance import fetch_tiktok_finance
-            n_rows, warnings = fetch_tiktok_finance(days_back=days)
-        with st.spinner("Enriqueciendo con SKU/producto desde Order API…"):
-            try:
-                from backend.fetchers.tiktok_orders_enrich import enrich_tiktok_orders
-                n_items, w2 = enrich_tiktok_orders(days_back=days)
-                warnings += w2
-            except Exception as exc:
-                n_items = 0
-                warnings.append(f"Order enrichment skipped: {exc}")
+            n_rows, w1 = fetch_tiktok_finance(days_back=days)
+            warnings += w1
+        except Exception as exc:
+            n_rows = 0
+            warnings.append(f"Finance fetch failed: {exc}")
+
+        progress.info("⏳ Paso 2/2: Enriqueciendo órdenes con SKU/producto/quantity…")
+        try:
+            from backend.fetchers.tiktok_orders_enrich import enrich_tiktok_orders
+            n_items, w2 = enrich_tiktok_orders(days_back=days)
+            warnings += w2
+        except Exception as exc:
+            n_items = 0
+            warnings.append(f"Order enrichment skipped: {exc}")
+
+        progress.empty()
         if n_rows:
             st.success(f"✅ {n_rows} transacciones · {n_items} line-items actualizados.")
         else:
             st.warning("No se actualizaron filas — revisa los mensajes abajo.")
-        with st.expander("Detalles de la sincronización", expanded=not n_rows):
+        with st.expander("📋 Detalles de la sincronización (clickéame)",
+                         expanded=True):
             for w in warnings:
                 st.text(w)
 

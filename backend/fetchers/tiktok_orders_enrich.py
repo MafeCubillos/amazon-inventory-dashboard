@@ -134,7 +134,8 @@ def enrich_tiktok_orders(days_back: int = 90) -> tuple[int, list[str]]:
     }
     page_token = ""
     all_orders: list[dict] = []
-    for page_i in range(400):
+    # 60 pages × 50 = 3000 orders max — plenty for 3 months.
+    for page_i in range(60):
         qs = {"page_size": "50"}
         if page_token:
             qs["page_token"] = page_token
