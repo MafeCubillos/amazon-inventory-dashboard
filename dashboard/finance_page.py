@@ -717,6 +717,40 @@ def render_finance_page():
             for w in warnings:
                 st.text(w)
 
+    # ── Excel backfill — fills the gap for Top-up ads / Bill deduction
+    #    rows that TikTok's /statements endpoint doesn't surface. User
+    #    uploads the monthly Excel she already downloads for her sheet. ──
+    with st.expander("📤 Backfill opcional desde Excel de TikTok "
+                     "(para GMV Payment TikTok Ads, Bill deduction)",
+                     expanded=False):
+        st.caption(
+            "El API de TikTok no devuelve 'Top up ads balance using GMV "
+            "payments' ni 'Bill deduction for negative balance'. "
+            "Sube aquí el Excel mensual del Finance Center → Statements y "
+            "esos renglones se completan automáticamente. Si subes un mes "
+            "ya cargado, se sobrescribe."
+        )
+        uploaded = st.file_uploader(
+            "Excel de TikTok (.xlsx)", type=["xlsx"], key="fin_xlsx_upload",
+        )
+        if uploaded is not None and st.button("📥 Importar", key="fin_import_btn"):
+            with st.spinner("Importando…"):
+                try:
+                    from backend.importers.tiktok_excel_import import (
+                        import_tiktok_excel,
+                    )
+                    n_imp, imp_warnings = import_tiktok_excel(uploaded)
+                    st.success(f"✅ {n_imp} transacciones importadas / "
+                               f"actualizadas desde el Excel.")
+                    with st.expander("Detalles de la importación",
+                                     expanded=True):
+                        for w in imp_warnings:
+                            st.text(w)
+                except Exception as exc:
+                    st.error(f"Error al importar: {exc}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
     df = _load_transactions(start, end)
     display_df = _order_details_df(df)
 
