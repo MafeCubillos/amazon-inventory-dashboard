@@ -183,8 +183,7 @@ _VAT_FEES_PCT = 21   # Standard rate for services (shipping, fees, ads)
 # Section headers are shown but have no spec — just the detail rows.
 _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
     ("Unit Sales", [
-        ("Unit Sales (Paid Only)",                  {"units_total": None}),
-        ("Unit Sales (Incl Samples)",               {"units_total": None}),  # same for now
+        ("Unit Sales",                              {"units_total": None}),
     ]),
     ("Net sales", [
         ("GMV incl VAT",                            {"raw": "gross_sales_amount",                "types": ["ORDER"]}),
@@ -199,7 +198,7 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
     ]),
     ("Product Margin", [
         ("Cost of goods",                           {"cogs_total": None}),
-        ("Average unit COGS",                       {"ratio": ("Cost of goods", "Unit Sales (Incl Samples)")}),
+        ("Average unit COGS",                       {"ratio": ("Cost of goods", "Unit Sales")}),
         ("Product Margin",                          {"diff": ("GMV excl VAT", "Cost of goods")}),
         ("Product Margin %",                        {"pct_of": ("Product Margin", "GMV excl VAT")}),
     ]),
@@ -458,6 +457,95 @@ def _cogs_by_month(fin_df: pd.DataFrame,
     return merged.groupby("month")["cogs_total_row"].sum().to_dict()
 
 
+_MANUAL_FIELDS: list[tuple[str, str]] = [
+    ("shipping_total",      "Shipping total (envíos UPS/Bequisa → TikTok)"),
+    ("agency_fee",          "Agency Management Fee"),
+    ("tiktok_ads_external", "TikTok Ads externo (Ads Manager fuera de GMV)"),
+]
+
+
+def _render_manual_editor(months: list[str]) -> None:
+    """Editable table for the 3 manual monthly P&L inputs. Saves to
+    tiktok_finance_manual (upsert by month+field)."""
+    with st.expander("✏️ Valores manuales por mes (Shipping, Agency, "
+                     "TikTok Ads externo)", expanded=False):
+        if not months:
+            st.info("Primero sincroniza datos para ver meses editables.")
+            return
+        from backend.database import db_admin
+        # Load current values
+        try:
+            existing = (db_admin.table("tiktok_finance_manual")
+                        .select("month,field,value_eur").execute().data) or []
+        except Exception as exc:
+            st.error(
+                "No encuentro la tabla `tiktok_finance_manual`. Corre "
+                "la migración `supabase/migrations/004_tiktok_finance_manual.sql` "
+                "en Supabase SQL Editor primero."
+            )
+            st.code(open(
+                "supabase/migrations/004_tiktok_finance_manual.sql"
+            ).read() if False else _MANUAL_MIGRATION_SQL, language="sql")
+            return
+        current = {(r["month"], r["field"]): float(r["value_eur"])
+                   for r in existing}
+        # Build DataFrame: rows = fields, cols = months
+        import pandas as _pd
+        rows = []
+        for field_key, field_label in _MANUAL_FIELDS:
+            r = {"Campo": field_label, "_key": field_key}
+            for m in months:
+                r[m] = current.get((m, field_key), 0.0)
+            rows.append(r)
+        df_edit = _pd.DataFrame(rows)
+        edited = st.data_editor(
+            df_edit.drop(columns=["_key"]),
+            use_container_width=True,
+            hide_index=True,
+            disabled=["Campo"],
+            key="manual_editor",
+            column_config={
+                m: st.column_config.NumberColumn(m, format="€%.2f", step=1.0)
+                for m in months
+            },
+        )
+        if st.button("💾 Guardar valores manuales", key="save_manual"):
+            saved, errs = 0, []
+            for i, (field_key, _) in enumerate(_MANUAL_FIELDS):
+                for m in months:
+                    try:
+                        v = float(edited.iloc[i][m] or 0)
+                    except Exception:
+                        continue
+                    try:
+                        db_admin.table("tiktok_finance_manual").upsert({
+                            "month":     m,
+                            "field":     field_key,
+                            "value_eur": v,
+                        }, on_conflict="month,field").execute()
+                        saved += 1
+                    except Exception as exc:
+                        errs.append(f"{m}/{field_key}: {exc}")
+            if errs:
+                st.error(f"Errores: {errs}")
+            else:
+                st.success(f"✅ {saved} celdas guardadas. Recarga la "
+                           "página para ver los cambios en el P&L.")
+
+
+_MANUAL_MIGRATION_SQL = """create table if not exists tiktok_finance_manual (
+    id          bigserial primary key,
+    month       text        not null,
+    field       text        not null,
+    value_eur   numeric(14, 2) not null default 0,
+    note        text,
+    updated_at  timestamptz not null default now(),
+    constraint tiktok_finance_manual_natural_key unique (month, field)
+);
+create index if not exists tiktok_finance_manual_month_idx
+    on tiktok_finance_manual (month);"""
+
+
 def _manual_by_month(field: str) -> dict[str, float]:
     """Read manual monthly values from Supabase (table may not exist yet;
     returns {} silently). Table shape: tiktok_finance_manual (month,
@@ -612,14 +700,14 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
                     "Advertising cost", "Adjustments (API all non-order)",
                     "Shipping, Fees, Ads", "Shipping, Fees, Ads - excl VAT",
                     "Gross profit - excl VAT", "Total settlement amount",
-                    "Unit Sales (Paid Only)", "Unit Sales (Incl Samples)"}
+                    "Unit Sales"}
     sum_mask     = pl["Métrica"].astype(str).isin(sum_labels)
     # Rows rendered as percentages instead of EUR.
     pct_labels   = {"Discounts %", "Product Margin %", "VAT", "Ads %",
                     "Gross Profit / GMV (%)"}
     pct_mask     = pl["Métrica"].astype(str).isin(pct_labels)
     # Unit-count rows (integer, no €).
-    int_labels   = {"Unit Sales (Paid Only)", "Unit Sales (Incl Samples)"}
+    int_labels   = {"Unit Sales"}
     int_mask     = pl["Métrica"].astype(str).isin(int_labels)
 
     headers = list(pl.columns)
@@ -955,16 +1043,22 @@ def render_finance_page():
                         if month_source_label == "Statement date"
                         else "order_created_date")
         units_total, units_per_product = _units_by_month(df, month_source)
+
+        # ── Manual-values editor ─────────────────────────────────
+        all_months_for_editor = sorted(set(
+            pd.to_datetime(df[month_source], errors="coerce")
+              .dt.strftime("%Y-%m").dropna().unique().tolist()
+        ))
+        _render_manual_editor(all_months_for_editor)
+
         pl = _pl_pivot(df, units_total, units_per_product, month_source)
         if pl.empty:
             st.info("Sin datos para pivotar.")
         else:
             st.caption(
                 f"Agregado por **{month_source_label.lower()}**. "
-                "P&L completo (igual al Google Sheet): Discounts, VAT, "
-                "GMV excl VAT, COGS, Product Margin, Gross profit. "
-                "Filas `(manual)` requieren input en la tabla editable "
-                "(próximo paso)."
+                "P&L completo igual al Google Sheet. Edita los valores "
+                "`(manual)` arriba y recarga para ver cambios."
             )
             st.markdown(_render_pl_html(pl), unsafe_allow_html=True)
             # Advanced: show unmapped fields in a collapsed expander so new
