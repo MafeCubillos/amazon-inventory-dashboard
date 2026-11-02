@@ -144,25 +144,66 @@ _NON_ORDER_TYPES = [
     "PROMOTION_ADJUSTMENT",
 ]
 
+# Section specs grew — now support derived rows that reference OTHER rows.
+# Supported spec types (dispatched in _spec_values):
+#   {"raw": "field"}                      — sum raw->>field across all rows
+#   {"raw": "field", "types": [...]}      — same, filtered by row type
+#   {"settlement_for": "TYPE"}            — sum settlement_amount for a type
+#   {"derived": "name"}                   — custom formula (smart_promotion,
+#                                           fbt_free_shipping)
+#   {"units_total": None}                 — total units from tiktok_order_items
+#   {"cogs_total": None}                  — Σ(qty × cogs_eur) via product_map
+#   {"sum": ["Label1", "Label2", ...]}    — sum of already-computed rows
+#   {"abs_sum": ["Label1", ...]}          — sum of absolute values (for Ship+Fees+Ads)
+#   {"neg_sum": ["Label1", ...]}          — sum of (−value) — flips the sign so
+#                                           negative costs become positive loads
+#   {"diff": ("A", "B")}                  — A − B
+#   {"pct_of": ("A", "B")}                — A/B × 100 (shown as %)
+#   {"ratio": ("A", "B")}                 — A/B (not multiplied by 100)
+#   {"vat_incl_amount": ("Label", pct)}   — Label × pct/(100+pct)
+#   {"vat_excl": ("Label", pct)}          — Label × 100/(100+pct)
+#   {"const_pct": pct}                    — constant % (for VAT=10 display)
+#   {"manual": "field_name"}              — manual input (0 for now, UI later)
+_NON_ORDER_TYPES = [
+    "FBT_WAREHOUSE_SERVICE_FEE", "LOGISTICS_REIMBURSEMENT",
+    "LOGISTICS_DEDUCTION", "NET_EARNINGS_BALANCE",
+    "TOP_UP_ADS_BALANCE_USING_GMV_PAYMENTS",
+    "BILL_PAYMENT_FOR_NEGATIVE_BALANCE",
+    "BILL_DEDUCTION_FOR_NEGATIVE_BALANCE",
+    "CHARGEBACK", "OTHER_ADJUSTMENT",
+    "TAX_ADJUSTMENT", "SELLER_MISSION_REWARD",
+    "PROMOTION_ADJUSTMENT",
+]
+
+# VAT rates for Monvita Spain
+_VAT_GMV_PCT  = 10   # Reduced rate for food supplements
+_VAT_FEES_PCT = 21   # Standard rate for services (shipping, fees, ads)
+
+# Row structure mirrors María's Google Sheet layout 1:1.
+# Section headers are shown but have no spec — just the detail rows.
 _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
-    ("Totales", [
-        ("Total settlement amount",                 {"raw": "settlement_amount"}),
+    ("Unit Sales", [
+        ("Unit Sales (Paid Only)",                  {"units_total": None}),
+        ("Unit Sales (Incl Samples)",               {"units_total": None}),  # same for now
     ]),
     ("Net sales", [
-        # Section total uses TikTok's own net_sales_amount; subrows are per-field.
-        ("Net sales",                               {"raw": "net_sales_amount",                  "types": ["ORDER"]}),
-        ("Subtotal before discounts",               {"raw": "gross_sales_amount",                "types": ["ORDER"]}),
+        ("GMV incl VAT",                            {"raw": "gross_sales_amount",                "types": ["ORDER"]}),
         ("Seller discounts",                        {"raw": "seller_discount_amount",            "types": ["ORDER"]}),
         ("Refund subtotal before seller discounts", {"raw": "gross_sales_refund_amount",         "types": ["ORDER"]}),
         ("Refund of seller discounts",              {"raw": "seller_discount_refund_amount",     "types": ["ORDER"]}),
+        ("Discounts",                               {"sum": ["Seller discounts", "Refund subtotal before seller discounts", "Refund of seller discounts"]}),
+        ("Discounts %",                             {"pct_of": ("Discounts", "GMV incl VAT")}),
+        ("GMV - Promos",                            {"raw": "net_sales_amount",                  "types": ["ORDER"]}),
+        ("VAT",                                     {"const_pct": _VAT_GMV_PCT}),
+        ("GMV excl VAT",                            {"vat_excl": ("GMV - Promos", _VAT_GMV_PCT)}),
+    ]),
+    ("Product Margin", [
+        ("Cost of goods",                           {"cogs_total": None}),
+        ("Average unit COGS",                       {"ratio": ("Cost of goods", "Unit Sales (Incl Samples)")}),
+        ("Product Margin",                          {"diff": ("GMV excl VAT", "Cost of goods")}),
+        ("Product Margin %",                        {"pct_of": ("Product Margin", "GMV excl VAT")}),
     ]),
     ("Shipping", [
-        # Section total uses TikTok's own shipping_cost_amount (per-order
-        # shipping subtotal). Matches Report's "Shipping" exactly.
-        ("Shipping",                                {"raw": "shipping_cost_amount",              "types": ["ORDER"]}),
-        # "TikTok Shop shipping fee" is always 0 for Monvita's Report —
-        # the API's shipping_fee_amount measures something else, so map
-        # to a nonexistent field to show 0 consistently.
         ("TikTok Shop shipping fee",                {"raw": "__none__",                          "types": ["ORDER"]}),
         ("Fulfilled by TikTok Shop shipping fee",   {"raw": "fbt_shipping_cost_amount",          "types": ["ORDER"]}),
         ("Customer shipping fee",                   {"raw": "customer_shipping_fee_amount",      "types": ["ORDER"]}),
@@ -172,33 +213,42 @@ _PL_SECTIONS: list[tuple[str, list[tuple[str, object]]]] = [
         ("Shipping subsidy",                        {"raw": "shipping_fee_subsidy_amount",       "types": ["ORDER"]}),
         ("Actual return shipping fee",              {"raw": "actual_return_shipping_fee_amount", "types": ["ORDER"]}),
         ("Return shipping label fee",               {"raw": "return_shipping_fee_amount",        "types": ["ORDER"]}),
-        # Fee for FBT free shipping = shipping_cost - fulfilled - incentive
-        # - customer - refunded_customer. Verified across Aug totals and the
-        # single-order sample.
         ("Fee for FBT free shipping",               {"derived": "fbt_free_shipping"}),
+        ("Shipping",                                {"raw": "shipping_cost_amount",              "types": ["ORDER"]}),
+        ("Shipping total (manual)",                 {"manual": "shipping_total"}),
     ]),
     ("Fees", [
-        # Section total uses TikTok's own fee_amount (per-order fees total).
-        ("Fees",                                    {"raw": "fee_amount",                        "types": ["ORDER"]}),
         ("TikTok Shop commission fee",              {"raw": "platform_commission_amount",        "types": ["ORDER"]}),
         ("Affiliate Commission",                    {"raw": "affiliate_commission_amount",       "types": ["ORDER"]}),
         ("Affiliate partner commission",            {"raw": "affiliate_partner_commission_amount","types": ["ORDER"]}),
         ("Affiliate Shop Ads commission",           {"raw": "affiliate_ads_commission_amount",   "types": ["ORDER"]}),
-        # Smart Promotion = fee_amount − commission − affiliate − partner − ads
         ("Smart Promotion fee",                     {"derived": "smart_promotion"}),
-    ]),
-    ("Adjustments", [
-        # Section total = sum settlement_amount for ALL non-ORDER types
-        ("Adjustments",                             {"raw": "settlement_amount", "types": _NON_ORDER_TYPES}),
+        ("Fees",                                    {"raw": "fee_amount",                        "types": ["ORDER"]}),
         ("FBT warehouse service fee",               {"settlement_for": "FBT_WAREHOUSE_SERVICE_FEE"}),
-        ("Logistics reimbursement",                 {"settlement_for": "LOGISTICS_REIMBURSEMENT"}),
-        ("Logistics deduction",                     {"settlement_for": "LOGISTICS_DEDUCTION"}),
-        ("Sales proceed (negative balance)",        {"settlement_for": "NET_EARNINGS_BALANCE"}),
-        ("GMV Payment for TikTok Ads",              {"settlement_for": "TOP_UP_ADS_BALANCE_USING_GMV_PAYMENTS"}),
         ("Bill payment (negative balance)",         {"settlement_for": "BILL_PAYMENT_FOR_NEGATIVE_BALANCE"}),
         ("Bill deduction (negative balance)",       {"settlement_for": "BILL_DEDUCTION_FOR_NEGATIVE_BALANCE"}),
-        ("Chargeback",                              {"settlement_for": "CHARGEBACK"}),
-        ("Other adjustment",                        {"settlement_for": "OTHER_ADJUSTMENT"}),
+        ("Agency Management Fee (manual)",          {"manual": "agency_fee"}),
+    ]),
+    ("Adjustments / Ads", [
+        ("GMV Payment for TikTok Ads",              {"settlement_for": "TOP_UP_ADS_BALANCE_USING_GMV_PAYMENTS"}),
+        ("TikTok Ads externo (manual)",             {"manual": "tiktok_ads_external"}),
+        ("Advertising cost",                        {"sum": ["GMV Payment for TikTok Ads", "TikTok Ads externo (manual)"]}),
+        ("Ads %",                                   {"pct_of": ("Advertising cost", "GMV incl VAT")}),
+        ("Adjustments (API all non-order)",         {"raw": "settlement_amount", "types": _NON_ORDER_TYPES}),
+    ]),
+    ("Resultado", [
+        ("Total settlement amount",                 {"raw": "settlement_amount"}),
+        # Shipping+Fees+Ads = |Shipping| + Shipping total + |Fees| + |Adjustments ex-ads| + Advertising
+        # Signs: Shipping/Fees/Adjustments come as negative in raw → flip to positive load
+        ("Shipping, Fees, Ads",                     {"neg_sum": ["Shipping", "Fees", "FBT warehouse service fee",
+                                                                  "Bill payment (negative balance)", "Bill deduction (negative balance)",
+                                                                  "GMV Payment for TikTok Ads"],
+                                                     "add": ["Shipping total (manual)", "Agency Management Fee (manual)",
+                                                             "TikTok Ads externo (manual)"]}),
+        ("VAT Fees",                                {"vat_incl_amount": ("Shipping, Fees, Ads", _VAT_FEES_PCT)}),
+        ("Shipping, Fees, Ads - excl VAT",          {"diff": ("Shipping, Fees, Ads", "VAT Fees")}),
+        ("Gross profit - excl VAT",                 {"formula": "GMV excl VAT - Cost of goods - Shipping, Fees, Ads - excl VAT"}),
+        ("Gross Profit / GMV (%)",                  {"pct_of": ("Gross profit - excl VAT", "GMV excl VAT")}),
     ]),
 ]
 
@@ -383,42 +433,141 @@ def _units_by_month(fin_df: pd.DataFrame,
     return totals, per_product
 
 
+def _cogs_by_month(fin_df: pd.DataFrame,
+                   month_source: str = "statement_date") -> dict[str, float]:
+    """Σ(quantity × cogs_eur) per month, joining tiktok_order_items ⟵
+    tiktok_product_map ⟵ products via order_id."""
+    if fin_df.empty or month_source not in fin_df.columns:
+        return {}
+    order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
+    items = _load_order_items(order_ids)
+    if items.empty:
+        return {}
+    cogs_by_pid = _load_cogs_map()
+    fin_small = (
+        fin_df[["order_adjustment_id", month_source]]
+        .rename(columns={"order_adjustment_id": "order_id"})
+        .copy()
+    )
+    fin_small["order_id"] = fin_small["order_id"].astype(str)
+    merged = items.merge(fin_small, on="order_id", how="left")
+    merged["month"] = pd.to_datetime(merged[month_source]).dt.strftime("%Y-%m")
+    merged = merged.dropna(subset=["month"])
+    merged["cogs_unit"] = merged["product_id"].map(cogs_by_pid).fillna(0.0)
+    merged["cogs_total_row"] = merged["quantity"].fillna(0) * merged["cogs_unit"]
+    return merged.groupby("month")["cogs_total_row"].sum().to_dict()
+
+
+def _manual_by_month(field: str) -> dict[str, float]:
+    """Read manual monthly values from Supabase (table may not exist yet;
+    returns {} silently). Table shape: tiktok_finance_manual (month,
+    field, value_eur)."""
+    try:
+        from backend.database import db_admin
+        rows = (db_admin.table("tiktok_finance_manual")
+                .select("month,value_eur")
+                .eq("field", field).execute().data) or []
+        return {r["month"]: float(r["value_eur"]) for r in rows}
+    except Exception:
+        return {}
+
+
 def _pl_pivot(df: pd.DataFrame,
               units_total: dict[str, int],
               units_per_product: pd.DataFrame,
               month_source: str = "statement_date") -> pd.DataFrame:
-    """Build a P&L DataFrame: rows = metrics, columns = months.
-    Pulls every value from raw JSON (so new TikTok fields are never
-    silently ignored — they land in the 'Unmapped' section). Section
-    SUM rows are computed from the detail rows below them."""
+    """Build a P&L DataFrame mirroring the user's Google Sheet.
+    Rows are computed in declared order; later rows can reference
+    earlier ones via sum/diff/pct_of/vat_excl/etc."""
     if df.empty or month_source not in df.columns:
         return pd.DataFrame()
     dfx = df.copy()
     dfx["month"] = pd.to_datetime(dfx[month_source]).dt.strftime("%Y-%m")
     all_months = sorted(dfx["month"].dropna().unique().tolist())
 
+    cogs_month = _cogs_by_month(df, month_source)
+
+    # In-memory cache of already-computed rows by label, so later rows
+    # (like Discounts %, Product Margin, Gross profit) can reference them.
+    computed: dict[str, dict[str, float]] = {}
+
+    def _get(label: str) -> dict[str, float]:
+        return computed.get(label, {})
+
+    def _mval(d: dict[str, float], m: str) -> float:
+        return float(d.get(m, 0.0) or 0.0)
+
     def _spec_values(spec) -> dict[str, float]:
-        if isinstance(spec, dict):
-            if "raw" in spec:
-                return _sum_from_raw(dfx, spec["raw"], spec.get("types"))
-            if "settlement_for" in spec:
-                return _sum_from_raw(dfx, "settlement_amount",
-                                     types=[spec["settlement_for"]])
-            if spec.get("derived") == "smart_promotion":
-                return _derive_smart_promotion(dfx)
-            if spec.get("derived") == "fbt_free_shipping":
-                return _derive_fbt_free_shipping(dfx)
+        if not isinstance(spec, dict):
+            return {}
+        # Direct-from-raw sources
+        if "raw" in spec:
+            return _sum_from_raw(dfx, spec["raw"], spec.get("types"))
+        if "settlement_for" in spec:
+            return _sum_from_raw(dfx, "settlement_amount",
+                                 types=[spec["settlement_for"]])
+        if spec.get("derived") == "smart_promotion":
+            return _derive_smart_promotion(dfx)
+        if spec.get("derived") == "fbt_free_shipping":
+            return _derive_fbt_free_shipping(dfx)
+        if "units_total" in spec:
+            return {m: float(units_total.get(m, 0)) for m in all_months}
+        if "cogs_total" in spec:
+            return {m: float(cogs_month.get(m, 0)) for m in all_months}
+        if "manual" in spec:
+            return _manual_by_month(spec["manual"])
+        # Derived from already-computed rows
+        if "sum" in spec:
+            labels = spec["sum"]
+            return {m: sum(_mval(_get(l), m) for l in labels) for m in all_months}
+        if "neg_sum" in spec:
+            # Flip signs on neg_sum (negative costs → positive load) and
+            # add any positive manual loads from the "add" key.
+            neg_labels = spec["neg_sum"]
+            add_labels = spec.get("add", [])
+            out = {}
+            for m in all_months:
+                v  = -sum(_mval(_get(l), m) for l in neg_labels)
+                v +=  sum(_mval(_get(l), m) for l in add_labels)
+                out[m] = v
+            return out
+        if "diff" in spec:
+            a, b = spec["diff"]
+            return {m: _mval(_get(a), m) - _mval(_get(b), m) for m in all_months}
+        if "pct_of" in spec:
+            a, b = spec["pct_of"]
+            out = {}
+            for m in all_months:
+                num, den = _mval(_get(a), m), _mval(_get(b), m)
+                out[m] = (num / den * 100.0) if den else 0.0
+            return out
+        if "ratio" in spec:
+            a, b = spec["ratio"]
+            out = {}
+            for m in all_months:
+                num, den = _mval(_get(a), m), _mval(_get(b), m)
+                out[m] = (num / den) if den else 0.0
+            return out
+        if "vat_incl_amount" in spec:
+            label, pct = spec["vat_incl_amount"]
+            return {m: _mval(_get(label), m) * pct / (100 + pct) for m in all_months}
+        if "vat_excl" in spec:
+            label, pct = spec["vat_excl"]
+            return {m: _mval(_get(label), m) * 100 / (100 + pct) for m in all_months}
+        if "const_pct" in spec:
+            return {m: float(spec["const_pct"]) for m in all_months}
+        if "formula" in spec and spec["formula"] == "GMV excl VAT - Cost of goods - Shipping, Fees, Ads - excl VAT":
+            # Gross profit excl VAT
+            return {m: _mval(_get("GMV excl VAT"), m)
+                      - _mval(_get("Cost of goods"), m)
+                      - _mval(_get("Shipping, Fees, Ads - excl VAT"), m)
+                    for m in all_months}
         return {}
 
     rows: list[dict] = []
 
-    # ── Quantity: total + per-product ──────────────────────────────
-    rows.append({"Métrica": "━ Quantity ━"})
-    qty_total = {"Métrica": "Quantity"}
-    for m in all_months:
-        qty_total[m] = int(units_total.get(m, 0))
-    qty_total["Total"] = sum(qty_total[m] for m in all_months)
-    rows.append(qty_total)
+    # ── Per-product quantity breakdown stays at the top ─────────────
+    rows.append({"Métrica": "━ Quantity por producto ━"})
     if not units_per_product.empty:
         for prod, s in units_per_product.iterrows():
             r = {"Métrica": f"   {prod}"}
@@ -427,20 +576,21 @@ def _pl_pivot(df: pd.DataFrame,
             r["Total"] = sum(r[m] for m in all_months)
             rows.append(r)
 
-    # ── P&L sections — every row pulls from raw directly (no SUM) ──
+    # ── Sections: compute each row, cache by label, emit ────────────
     for section_name, metrics in _PL_SECTIONS:
         rows.append({"Métrica": f"━ {section_name} ━"})
         for label, spec in metrics:
-            by_month = _spec_values(spec)
+            vals = _spec_values(spec)
+            # Normalize to {month: value} for all months
+            vals = {m: float(vals.get(m, 0.0) or 0.0) for m in all_months}
+            computed[label] = vals
             row = {"Métrica": label}
             for m in all_months:
-                row[m] = round(float(by_month.get(m, 0.0)), 2)
-            row["Total"] = round(sum(row[m] for m in all_months), 2)
+                row[m] = round(vals[m], 2)
+            row["Total"] = round(sum(vals.values()), 2)
             rows.append(row)
 
-    # ── Unmapped fields — logged to session_state only (not rendered
-    #    in the P&L to keep it clean). The caller can show them in an
-    #    expander outside the P&L table.
+    # ── Unmapped fields → session_state (shown in expander) ────────
     try:
         st.session_state["pl_unmapped"] = _unmapped_fields_sums(dfx)
     except Exception:
@@ -456,10 +606,21 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
     and inject it with st.markdown(unsafe_allow_html=True) for full
     control over row backgrounds and the dark/green header."""
     section_mask = pl["Métrica"].astype(str).str.startswith("━")
-    # First row in each section is a TOTAL — bold + gray background.
-    sum_labels   = {"Total settlement amount", "Net sales",
-                    "Shipping", "Fees", "Adjustments", "Quantity"}
+    # Rows that get the SUM-row treatment (bold + gray background).
+    sum_labels   = {"Discounts", "GMV - Promos", "GMV excl VAT",
+                    "Product Margin", "Shipping", "Fees",
+                    "Advertising cost", "Adjustments (API all non-order)",
+                    "Shipping, Fees, Ads", "Shipping, Fees, Ads - excl VAT",
+                    "Gross profit - excl VAT", "Total settlement amount",
+                    "Unit Sales (Paid Only)", "Unit Sales (Incl Samples)"}
     sum_mask     = pl["Métrica"].astype(str).isin(sum_labels)
+    # Rows rendered as percentages instead of EUR.
+    pct_labels   = {"Discounts %", "Product Margin %", "VAT", "Ads %",
+                    "Gross Profit / GMV (%)"}
+    pct_mask     = pl["Métrica"].astype(str).isin(pct_labels)
+    # Unit-count rows (integer, no €).
+    int_labels   = {"Unit Sales (Paid Only)", "Unit Sales (Incl Samples)"}
+    int_mask     = pl["Métrica"].astype(str).isin(int_labels)
 
     headers = list(pl.columns)
     th = "".join(
@@ -472,15 +633,17 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
     )
 
     body_rows = []
-    in_quantity = False
+    in_quantity_section = False
     for i, row in pl.iterrows():
         label = str(row["Métrica"])
         if section_mask.loc[i]:
-            in_quantity = (label == "━ Quantity ━")
+            in_quantity_section = ("Quantity" in label)
             tr_style = ("background:#1f2937;color:#ffffff;"
                         "font-weight:700;")
         elif sum_mask.loc[i]:
             tr_style = "background:#e5e7eb;font-weight:700;"
+        elif pct_mask.loc[i]:
+            tr_style = "font-style:italic;color:#2563eb;"  # blue italic for %
         else:
             tr_style = ""
 
@@ -497,9 +660,9 @@ def _render_pl_html(pl: pd.DataFrame) -> str:
             else:
                 try:
                     n = float(v)
-                    # Integer formatting for Quantity section and the
-                    # Quantity total row itself
-                    if in_quantity or label == "Quantity":
+                    if pct_mask.loc[i]:
+                        txt = f"{n:,.1f}%"
+                    elif int_mask.loc[i] or in_quantity_section:
                         txt = f"{int(n):,}"
                     else:
                         txt = f"€{n:,.2f}"
@@ -798,16 +961,11 @@ def render_finance_page():
         else:
             st.caption(
                 f"Agregado por **{month_source_label.lower()}**. "
-                "**COGS no está aquí** — está en el tab 📦 Por producto."
+                "P&L completo (igual al Google Sheet): Discounts, VAT, "
+                "GMV excl VAT, COGS, Product Margin, Gross profit. "
+                "Filas `(manual)` requieren input en la tabla editable "
+                "(próximo paso)."
             )
-            if sum(units_total.values()) == 0:
-                st.warning(
-                    "⚠️ Quantity = 0 en todos los meses. Significa que la "
-                    "tabla `tiktok_order_items` está vacía. Revisa que "
-                    "corriste la migración `003_tiktok_order_items.sql` en "
-                    "Supabase y que el último Sync mostró 'N line-items "
-                    "actualizados'."
-                )
             st.markdown(_render_pl_html(pl), unsafe_allow_html=True)
             # Advanced: show unmapped fields in a collapsed expander so new
             # TikTok fields never silently miss, but the P&L stays clean.
