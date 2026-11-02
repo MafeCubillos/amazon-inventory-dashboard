@@ -175,6 +175,38 @@ def import_tiktok_excel(file_bytes_or_io) -> tuple[int, list[str]]:
     tokens = get_tokens() or {}
     shop_cipher = tokens.get("shop_cipher") or "manual-upload"
 
+    # ── Figure out which months this Excel covers so we can wipe
+    #    pre-existing rows for those months first. Guarantees the
+    #    Excel's data wins and never leaves duplicates/stale rows. ──
+    stmt_col = hdrs.index("Statement date") if "Statement date" in hdrs else None
+    months_in_file: set[str] = set()
+    if stmt_col is not None:
+        for r in rows:
+            iso = _parse_date(r[stmt_col])
+            if iso:
+                months_in_file.add(iso[:7])  # YYYY-MM
+
+    if months_in_file:
+        for ym in sorted(months_in_file):
+            start = f"{ym}-01"
+            # end = next month's day 01 (exclusive)
+            y, m = ym.split("-")
+            next_m = int(m) + 1
+            next_y = int(y) + (1 if next_m > 12 else 0)
+            next_m = 1 if next_m > 12 else next_m
+            end = f"{next_y:04d}-{next_m:02d}-01"
+            try:
+                deleted = (db_admin.table("tiktok_finance_transactions")
+                           .delete()
+                           .gte("statement_date", start)
+                           .lt("statement_date", end)
+                           .execute())
+                n = len(deleted.data or [])
+                warnings.append(f"Wiped {n} existing rows for {ym} "
+                                f"(Excel is authoritative).")
+            except Exception as exc:
+                warnings.append(f"Could not wipe {ym}: {exc}")
+
     upserted = 0
     skipped = 0
     types_seen: dict[str, int] = {}
