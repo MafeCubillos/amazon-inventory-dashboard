@@ -968,6 +968,37 @@ def render_finance_page():
             for w in warnings:
                 st.text(w)
 
+    # ── Closed months widget: shows which months are Excel-locked and
+    #    lets the user reopen one for Sync to touch again. ──
+    with st.expander("🔒 Meses cerrados (Excel es la fuente de verdad)",
+                     expanded=False):
+        try:
+            from backend.database import db_admin
+            closed = (db_admin.table("tiktok_finance_closed_months")
+                      .select("*").order("month").execute().data) or []
+        except Exception:
+            closed = []
+        if not closed:
+            st.caption("No hay meses cerrados aún. Sube el Excel de un mes "
+                       "para cerrarlo (Sync no lo tocará).")
+        else:
+            st.caption(f"Sync **salta** estos meses — solo el upload de Excel "
+                       "los puede modificar:")
+            for row in closed:
+                col1, col2, col3 = st.columns([2, 3, 1])
+                col1.markdown(f"**{row['month']}** 🔒")
+                col2.caption(f"cerrado {row.get('closed_at','')[:10]} "
+                             f"(fuente: {row.get('source','?')})")
+                if col3.button("🔓 Reabrir", key=f"reopen_{row['month']}"):
+                    try:
+                        db_admin.table("tiktok_finance_closed_months") \
+                            .delete().eq("month", row["month"]).execute()
+                        st.success(f"Mes {row['month']} reabierto. Sync puede "
+                                   "sobrescribirlo ahora.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"No se pudo reabrir: {exc}")
+
     # ── Excel backfill — fills the gap for Top-up ads / Bill deduction
     #    rows that TikTok's /statements endpoint doesn't surface. User
     #    uploads the monthly Excel she already downloads for her sheet. ──

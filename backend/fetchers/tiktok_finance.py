@@ -276,14 +276,30 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
     if not statements:
         return 0, warnings
 
+    # ── Load list of closed months so Sync never overwrites Excel data ─
+    try:
+        closed_rows = (db_admin.table("tiktok_finance_closed_months")
+                       .select("month").execute().data) or []
+        closed_months = {r["month"] for r in closed_rows}
+    except Exception:
+        closed_months = set()
+    if closed_months:
+        warnings.append(f"Meses cerrados (Sync los salta): "
+                        f"{', '.join(sorted(closed_months))}")
+
     # ── Step 2: fetch transactions for each statement ──────────────────
     upserted = 0
+    skipped_closed = 0
     total_tx = 0
     for stmt in statements:
         stmt_id   = (stmt.get("id") or stmt.get("statement_id") or "").strip()
         if not stmt_id:
             continue
         stmt_date = _dt_from_ts(stmt.get("statement_time"))
+        # Skip entire statement if its month is closed
+        if stmt_date and stmt_date[:7] in closed_months:
+            skipped_closed += 1
+            continue
         tx_path   = _TRANSACTIONS_FMT.format(statement_id=stmt_id)
         tx_page_token = ""
         for page_i in range(200):
@@ -336,7 +352,9 @@ def fetch_tiktok_finance(days_back: int = 90) -> tuple[int, list[str]]:
             if not tx_page_token:
                 break
 
-    warnings.append(f"Transactions scanned: {total_tx}. Rows upserted: {upserted}.")
+    warnings.append(f"Transactions scanned: {total_tx}. Rows upserted: {upserted}."
+                    + (f" Skipped {skipped_closed} statements in closed months."
+                       if skipped_closed else ""))
     logger.info("tiktok_finance  %d statements, %d transactions, %d upserted",
                 len(statements), total_tx, upserted)
 

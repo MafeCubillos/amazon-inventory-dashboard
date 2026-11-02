@@ -268,4 +268,18 @@ def import_tiktok_excel(file_bytes_or_io) -> tuple[int, list[str]]:
     warnings.append(f"Upserted: {upserted}, skipped (no IDs): {skipped}.")
     warnings.append("Tipos vistos: " + ", ".join(
         f"{k}({v})" for k, v in sorted(types_seen.items(), key=lambda x: -x[1])))
+
+    # Mark months as "closed" so Sync doesn't overwrite them
+    for ym in sorted(months_in_file):
+        try:
+            db_admin.table("tiktok_finance_closed_months").upsert({
+                "month":  ym,
+                "source": "excel",
+            }, on_conflict="month").execute()
+        except Exception as exc:
+            warnings.append(f"Could not mark {ym} as closed: {exc}")
+    if months_in_file:
+        warnings.append(f"✅ Meses cerrados: {', '.join(sorted(months_in_file))} "
+                        f"(Sync no los sobrescribirá).")
+
     return upserted, warnings
