@@ -38,7 +38,7 @@ def get_supplier(sid: int) -> dict | None:
 
 def next_po_number() -> int:
     """Last used PO number + 1 (first real one will be 87)."""
-    rows = (db_admin.table("purchase_orders")
+    rows = (db_admin.table("po_orders")
             .select("po_number")
             .order("po_number", desc=True)
             .limit(1).execute().data) or []
@@ -46,7 +46,7 @@ def next_po_number() -> int:
 
 
 def list_purchase_orders(limit: int = 200) -> list[dict]:
-    rows = (db_admin.table("purchase_orders")
+    rows = (db_admin.table("po_orders")
             .select("*, po_suppliers(name)")
             .order("po_number", desc=True)
             .limit(limit).execute().data) or []
@@ -57,12 +57,12 @@ def list_purchase_orders(limit: int = 200) -> list[dict]:
 
 
 def get_purchase_order(po_id: int) -> dict | None:
-    rows = (db_admin.table("purchase_orders")
+    rows = (db_admin.table("po_orders")
             .select("*").eq("id", po_id).limit(1).execute().data) or []
     if not rows:
         return None
     po = rows[0]
-    po["items"] = (db_admin.table("purchase_order_items")
+    po["items"] = (db_admin.table("po_order_items")
                    .select("*").eq("po_id", po_id)
                    .order("position").execute().data) or []
     po["supplier"] = get_supplier(po["supplier_id"])
@@ -96,7 +96,7 @@ def create_purchase_order(*,
         "status":      "draft",
         "notes":       notes,
     }
-    po = (db_admin.table("purchase_orders")
+    po = (db_admin.table("po_orders")
           .insert(po_row).execute().data or [{}])[0]
     po_id = po["id"]
 
@@ -113,19 +113,19 @@ def create_purchase_order(*,
             "unit_price":  float(it.get("unit_price") or 0),
         })
     if item_rows:
-        db_admin.table("purchase_order_items").insert(item_rows).execute()
+        db_admin.table("po_order_items").insert(item_rows).execute()
     return get_purchase_order(po_id)
 
 
 def update_po_status(po_id: int, status: str) -> None:
-    db_admin.table("purchase_orders").update({
+    db_admin.table("po_orders").update({
         "status": status,
         "updated_at": datetime.utcnow().isoformat(),
     }).eq("id", po_id).execute()
 
 
 def delete_po(po_id: int) -> None:
-    db_admin.table("purchase_orders").delete().eq("id", po_id).execute()
+    db_admin.table("po_orders").delete().eq("id", po_id).execute()
 
 
 # ─────────────────────────────────────────────────────────────────────
