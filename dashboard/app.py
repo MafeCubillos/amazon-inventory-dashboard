@@ -1,4 +1,4 @@
-"""Nyvos Inventory Dashboard — v2.0"""
+"""Nyvos Operations Hub — v2.0"""
 
 import sys
 import base64
@@ -51,7 +51,7 @@ LOGO_IMG_SM = (f'<img src="data:image/png;base64,{LOGO_B64}" '
 
 # ── Page config ────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Nyvos · Inventory",
+    page_title="Nyvos · Operations",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -909,7 +909,7 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
 </style>
 <div style="padding:28px 12px 20px;border-bottom:1px solid #222;margin-bottom:12px">
   {LOGO_IMG_SM}
-  <div style="font-size:10px;color:#666;margin-top:10px;letter-spacing:.14em;font-weight:600">INVENTORY DASHBOARD</div>
+  <div style="font-size:10px;color:#666;margin-top:10px;letter-spacing:.14em;font-weight:600">OPERATIONS HUB</div>
 </div>""", unsafe_allow_html=True)
 
         # ── Navigation buttons ─────────────────────────────────
@@ -4559,7 +4559,7 @@ st.markdown(f"""
     {LOGO_IMG}
     <div style="width:1px;height:36px;background:rgba(255,255,255,0.15)"></div>
     <span style="font-size:16px;font-weight:600;color:#fff;letter-spacing:.02em">
-      Inventory Dashboard
+      Operations Hub
     </span>
   </div>
   <div style="font-size:13px;color:#aaa;display:flex;align-items:center;gap:8px">
