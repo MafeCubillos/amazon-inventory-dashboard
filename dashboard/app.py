@@ -1,4 +1,4 @@
-"""Nyvos Amazon EU Inventory Dashboard — v2.0"""
+"""Nyvos Inventory Dashboard — v2.0"""
 
 import sys
 import base64
@@ -4559,7 +4559,7 @@ st.markdown(f"""
     {LOGO_IMG}
     <div style="width:1px;height:36px;background:rgba(255,255,255,0.15)"></div>
     <span style="font-size:16px;font-weight:600;color:#fff;letter-spacing:.02em">
-      Amazon EU Inventory
+      Inventory Dashboard
     </span>
   </div>
   <div style="font-size:13px;color:#aaa;display:flex;align-items:center;gap:8px">
