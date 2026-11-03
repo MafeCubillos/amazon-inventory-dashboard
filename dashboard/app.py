@@ -40,12 +40,12 @@ def _logo_b64() -> str:
 
 LOGO_B64 = _logo_b64()
 LOGO_IMG = (f'<img src="data:image/png;base64,{LOGO_B64}" '
-            f'style="height:44px;display:block" alt="Nyvos">'
+            f'style="height:56px;display:block" alt="Nyvos">'
             if LOGO_B64 else
             '<span style="font-size:22px;font-weight:900;color:#fff;letter-spacing:.08em">NYVOS</span>')
 
 LOGO_IMG_SM = (f'<img src="data:image/png;base64,{LOGO_B64}" '
-               f'style="height:36px;display:block;margin-bottom:6px" alt="Nyvos">'
+               f'style="width:100%;max-width:200px;height:auto;display:block" alt="Nyvos">'
                if LOGO_B64 else
                '<span style="font-size:20px;font-weight:900;color:#fff">NYVOS</span>')
 
@@ -888,9 +888,28 @@ def render_sidebar():
     with st.sidebar:
         # ── Logo ──────────────────────────────────────────────
         st.markdown(f"""
-<div style="padding:24px 16px 20px;border-bottom:1px solid #222;margin-bottom:8px">
+<style>
+/* Left-align sidebar nav buttons */
+section[data-testid="stSidebar"] button[kind="primary"] p,
+section[data-testid="stSidebar"] button[kind="secondary"] p {{
+    text-align: left !important;
+    justify-content: flex-start !important;
+    width: 100% !important;
+}}
+section[data-testid="stSidebar"] button[kind="primary"],
+section[data-testid="stSidebar"] button[kind="secondary"] {{
+    text-align: left !important;
+    justify-content: flex-start !important;
+}}
+section[data-testid="stSidebar"] button[kind="primary"] div[data-testid="stMarkdownContainer"],
+section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMarkdownContainer"] {{
+    text-align: left !important;
+    width: 100% !important;
+}}
+</style>
+<div style="padding:28px 12px 20px;border-bottom:1px solid #222;margin-bottom:12px">
   {LOGO_IMG_SM}
-  <div style="font-size:11px;color:#666;margin-top:8px;letter-spacing:.1em;font-weight:600">AMAZON EU DASHBOARD</div>
+  <div style="font-size:10px;color:#666;margin-top:10px;letter-spacing:.14em;font-weight:600">INVENTORY DASHBOARD</div>
 </div>""", unsafe_allow_html=True)
 
         # ── Navigation buttons ─────────────────────────────────
