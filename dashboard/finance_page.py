@@ -406,25 +406,60 @@ def _units_by_month(fin_df: pd.DataFrame,
     empty = ({}, pd.DataFrame())
     if fin_df.empty or month_source not in fin_df.columns:
         return empty
+
     order_ids = fin_df["order_adjustment_id"].dropna().astype(str).unique().tolist()
     items = _load_order_items(order_ids)
-    if items.empty:
+
+    # ── Enriched path (API orders with per-SKU items) ───────────────
+    merged_items = pd.DataFrame()
+    if not items.empty:
+        fin_small = (
+            fin_df[["order_adjustment_id", month_source]]
+            .rename(columns={"order_adjustment_id": "order_id"})
+            .copy()
+        )
+        fin_small["order_id"] = fin_small["order_id"].astype(str)
+        merged_items = items.merge(fin_small, on="order_id", how="left")
+        merged_items["month"] = pd.to_datetime(merged_items[month_source]).dt.strftime("%Y-%m")
+        merged_items = merged_items.dropna(subset=["month"])
+    enriched_order_ids = (set(merged_items["order_id"].astype(str).unique())
+                          if not merged_items.empty else set())
+
+    # ── Fallback path (Excel-imported months): use fin_df.quantity ─
+    # Any ORDER row whose order_adjustment_id is NOT in the enriched set
+    # contributes its own `quantity` + its own product_name / sku_name.
+    fallback = pd.DataFrame()
+    if "quantity" in fin_df.columns:
+        is_order_row = (
+            fin_df.get("type", "").astype(str).str.upper().eq("ORDER")
+            & fin_df["quantity"].notna()
+            & fin_df["order_adjustment_id"].astype(str).map(
+                lambda x: x not in enriched_order_ids)
+        )
+        fb = fin_df[is_order_row].copy()
+        if not fb.empty:
+            fb["month"] = pd.to_datetime(fb[month_source], errors="coerce").dt.strftime("%Y-%m")
+            fb = fb.dropna(subset=["month"])
+            fb["order_id"] = fb["order_adjustment_id"].astype(str)
+            if "product_name" not in fb.columns:
+                fb["product_name"] = None
+            if "sku_name" not in fb.columns:
+                fb["sku_name"] = None
+            if "sku_id" not in fb.columns:
+                fb["sku_id"] = None
+            fallback = fb[["order_id", "month", "quantity",
+                           "product_name", "sku_name", "sku_id"]]
+
+    frames = [d for d in (merged_items, fallback) if not d.empty]
+    if not frames:
         return empty
-    fin_small = (
-        fin_df[["order_adjustment_id", month_source]]
-        .rename(columns={"order_adjustment_id": "order_id"})
-        .copy()
-    )
-    fin_small["order_id"] = fin_small["order_id"].astype(str)
-    merged = items.merge(fin_small, on="order_id", how="left")
-    merged["month"] = pd.to_datetime(merged[month_source]).dt.strftime("%Y-%m")
-    merged = merged.dropna(subset=["month"])
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+
     totals = merged.groupby("month")["quantity"].sum().astype(int).to_dict()
 
-    # Per-product breakdown (short label from product_name or sku_name)
     label = (merged["product_name"].fillna(merged["sku_name"])
                                     .fillna(merged["sku_id"]))
-    merged["producto"] = label
+    merged["producto"] = label.fillna("(sin producto)")
     per_product = (
         merged.pivot_table(index="producto", columns="month",
                            values="quantity", aggfunc="sum", fill_value=0)
