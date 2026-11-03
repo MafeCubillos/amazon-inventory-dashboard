@@ -203,16 +203,11 @@ def update_po_status(po_id: int, status: str) -> None:
         "status": status,
         "updated_at": datetime.utcnow().isoformat(),
     }).eq("id", po_id).execute()
-    # Mirror status change to the legacy Orders page too
+    # Mirror the full PO (insert if missing, else replace) to the legacy
+    # Orders page — update-only would miss POs created before the sync existed.
     po = get_purchase_order(po_id)
     if po:
-        legacy_status = _STATUS_MAP.get(status, "ordered")
-        try:
-            db_admin.table("purchase_orders").update({
-                "status": legacy_status,
-            }).eq("po_number", str(po["po_number"])).execute()
-        except Exception:
-            pass
+        _sync_to_legacy_orders(po)
 
 
 def delete_po(po_id: int) -> None:
