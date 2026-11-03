@@ -895,17 +895,17 @@ def render_sidebar():
 
         # ── Navigation buttons ─────────────────────────────────
         current = st.session_state.get("page", "inventory")
-        nav_items = [("📦", "Inventory",       "inventory"),
-                     ("🚚", "Reorder",        "reorder"),
+        nav_items = [("📦", "Inventario",      "inventory"),
+                     ("🚚", "Reposición",      "reorder"),
                      ("🧾", "Órdenes compra", "purchase_orders"),
-                     ("📋", "Orders",         "orders"),
-                     ("🏷️", "Labels",         "labels"),
-                     ("🏠", "Local Stock",    "local"),
-                     ("🎵", "TikTok",         "tiktok"),
-                     ("💰", "Finance-TikTok", "finance"),
-                     ("📈", "Forecast",       "forecast"),
-                     ("📊", "Forecast Builder", "forecast_builder"),
-                     ("⚙️", "Settings",       "settings")]
+                     ("📋", "Pedidos",         "orders"),
+                     ("🏷️", "Etiquetas",       "labels"),
+                     ("🏠", "Stock local",     "local"),
+                     ("🎵", "TikTok",          "tiktok"),
+                     ("💰", "Finanzas TikTok", "finance"),
+                     ("📈", "Pronóstico",      "forecast"),
+                     ("📊", "Constructor pronóstico", "forecast_builder"),
+                     ("⚙️", "Ajustes",         "settings")]
 
         for icon, label, key in nav_items:
             active = current == key
