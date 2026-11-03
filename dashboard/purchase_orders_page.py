@@ -17,17 +17,28 @@ from backend.purchase_orders import (
     update_company_profile, update_po_status, upsert_product,
     upsert_supplier,
 )
+from backend.google_oauth import (
+    build_auth_url, disconnect, exchange_code, get_google_tokens,
+    is_connected, save_client,
+)
+from backend.google_services import create_gmail_draft, upload_po_to_drive
 
 
 # ─────────────────────────────────────────────────────────────────────
 def render_purchase_orders_page():
     st.title("🧾 Órdenes de compra")
 
-    tab_list, tab_new, tab_products, tab_suppliers, tab_company = st.tabs([
+    # If Google just redirected back with ?code=…, finish the OAuth
+    # exchange before rendering anything else.
+    _handle_oauth_callback()
+
+    (tab_list, tab_new, tab_products, tab_suppliers,
+     tab_google, tab_company) = st.tabs([
         "📋 Historial",
         "➕ Nueva orden",
         "📦 Productos",
         "🏢 Proveedores",
+        "🔗 Google (Drive + Gmail)",
         "⚙️ Datos de empresa",
     ])
 
@@ -39,6 +50,8 @@ def render_purchase_orders_page():
         _render_products()
     with tab_suppliers:
         _render_suppliers()
+    with tab_google:
+        _render_google()
     with tab_company:
         _render_company()
 
@@ -109,6 +122,45 @@ def _render_po_detail(po: dict):
             "Precio Und":  it["unit_price"],
             "Precio total": it.get("line_total"),
         } for it in items]), use_container_width=True, hide_index=True)
+
+    # ── Google integration buttons (Drive + Gmail) ───────────────
+    if is_connected():
+        gc1, gc2 = st.columns(2)
+        drive_label = ("📤 Subir a Drive" if not po.get("drive_file_id")
+                       else "📤 Volver a subir a Drive")
+        if gc1.button(drive_label, key=f"drive_{po['id']}",
+                      use_container_width=True):
+            with st.spinner("Subiendo a Google Drive..."):
+                ok, msg, _ = upload_po_to_drive(po["id"])
+            if ok:
+                st.success(f"✅ Subido. [Abrir en Drive]({msg})")
+                st.rerun()
+            else:
+                st.error(msg)
+        if po.get("drive_file_id"):
+            gc1.caption(
+                f"✓ Última subida: "
+                f"[archivo en Drive](https://drive.google.com/file/d/{po['drive_file_id']})")
+
+        gmail_label = ("✉️ Crear borrador email al proveedor"
+                       if not po.get("gmail_draft_id")
+                       else "✉️ Volver a crear borrador")
+        if gc2.button(gmail_label, key=f"gmail_{po['id']}",
+                      use_container_width=True):
+            with st.spinner("Creando borrador en Gmail..."):
+                ok, msg, draft_id = create_gmail_draft(po["id"])
+            if ok:
+                st.success("✅ Borrador creado. Ábrelo en Gmail → "
+                           "[Borradores](https://mail.google.com/mail/u/0/#drafts) "
+                           "para revisarlo y enviar.")
+                st.rerun()
+            else:
+                st.error(msg)
+        if po.get("gmail_draft_id"):
+            gc2.caption("✓ Borrador ya existente — se sobreescribe si vuelves a pulsar.")
+    else:
+        st.info("💡 Conecta Google en el tab **🔗 Google** para subir "
+                "automáticamente a Drive y crear borradores de email.")
 
     c1, c2, c3 = st.columns(3)
     new_status = c1.selectbox("Cambiar estado",
@@ -317,6 +369,12 @@ def _render_products():
         active = st.checkbox("Activo (aparece en el selector de catálogo)",
                               value=bool((current or {}).get("active", True)),
                               key="prod_active")
+        drive_folder = st.text_input(
+            "Drive folder ID (opcional)",
+            value=(current or {}).get("drive_folder_id", "") or "",
+            key="prod_drive",
+            help=("ID de la carpeta de Drive donde guardar las POs de este producto. "
+                  "Lo sacas de la URL: drive.google.com/drive/folders/[este-id]"))
 
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar producto", type="primary", key="prod_save"):
@@ -331,6 +389,7 @@ def _render_products():
                     "default_supplier_id": sup_options.get(sup_pick)
                                            if sup_pick != "(ninguno)" else None,
                     "active":              active,
+                    "drive_folder_id":     drive_folder.strip() or None,
                 }
                 if current:
                     data["id"] = current["id"]
@@ -432,3 +491,107 @@ def _render_company():
                                  "email": email or None, "currency": curr})
         st.success("Guardado.")
         st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Google OAuth tab
+# ─────────────────────────────────────────────────────────────────────
+def _get_app_redirect_uri() -> str:
+    """Streamlit Cloud's app URL — override via secret if needed."""
+    try:
+        v = st.secrets.get("APP_URL")
+        if v:
+            return str(v).rstrip("/") + "/"
+    except Exception:
+        pass
+    return "https://nyvos-inventory.streamlit.app/"
+
+
+def _handle_oauth_callback():
+    """If Google redirected back with ?code=…, finish the exchange."""
+    qp = st.query_params
+    code = qp.get("code")
+    if not code:
+        return
+    try:
+        exchange_code(code, _get_app_redirect_uri())
+        st.success("✅ Google conectado correctamente.")
+    except Exception as exc:
+        st.error(f"No se pudo completar la autorización: {exc}")
+    # Clear the query so a refresh doesn't retry
+    st.query_params.clear()
+
+
+def _render_google():
+    tok = get_google_tokens()
+    connected = is_connected()
+
+    if connected:
+        st.success(f"✅ Conectado como **{tok.get('authorized_email','?')}**")
+        st.caption("Permisos: Google Drive (subir PDFs) + Gmail (crear borradores)")
+        c1, c2 = st.columns(2)
+        if c1.button("🔌 Desconectar Google", key="goog_disconnect"):
+            disconnect()
+            st.rerun()
+        c2.caption("Al desconectar, los botones de Drive/Gmail desaparecen "
+                   "hasta que vuelvas a autorizar.")
+        return
+
+    st.markdown("""
+#### Conectar con tu cuenta de Google Workspace de Monvita
+
+Necesitas hacer esto **una sola vez**. Lleva ~10 minutos. Después, el
+dashboard puede subir PDFs a Drive y crear borradores en Gmail por ti.
+
+**Pasos (en otra pestaña del navegador):**
+
+1. Ve a **https://console.cloud.google.com** y accede con `mafe.cubillos@monvita.co`
+2. Crea un nuevo proyecto llamado `Monvita Operations` (botón arriba a la izquierda, "New Project")
+3. En el buscador de arriba, busca y entra en **"Google Drive API"** → **Enable**
+4. Lo mismo con **"Gmail API"** → **Enable**
+5. Menú lateral → **APIs & Services → OAuth consent screen**:
+   - User type: **Internal** (si tienes Workspace) o **External**
+   - App name: `Monvita Operations`
+   - User support email: `mafe.cubillos@monvita.co`
+   - Developer contact: `mafe.cubillos@monvita.co`
+   - **Save and Continue** hasta publicar
+6. Menú lateral → **APIs & Services → Credentials → + Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - Name: `Dashboard Streamlit`
+   - **Authorized redirect URIs** → añade exactamente:
+     ```
+     {redirect}
+     ```
+   - **Create**
+7. Copia el **Client ID** y el **Client Secret** que te muestra, y pégalos abajo 👇
+""".format(redirect=_get_app_redirect_uri()))
+
+    with st.form("google_client_form"):
+        c1, c2 = st.columns(2)
+        cid = c1.text_input("Client ID",     value=tok.get("client_id") or "",
+                            key="goog_cid")
+        csec = c2.text_input("Client Secret", value=tok.get("client_secret") or "",
+                             type="password", key="goog_csec")
+        submit = st.form_submit_button("💾 Guardar credenciales",
+                                        type="primary", use_container_width=True)
+        if submit:
+            if not cid.strip() or not csec.strip():
+                st.error("Faltan Client ID o Client Secret.")
+            else:
+                save_client(cid, csec)
+                st.success("Credenciales guardadas. Ahora pulsa 'Autorizar'.")
+                st.rerun()
+
+    if (tok.get("client_id") or "").strip():
+        try:
+            auth_url = build_auth_url(_get_app_redirect_uri())
+            st.markdown(
+                f'<a href="{auth_url}" target="_self" '
+                f'style="display:inline-block;background:#4285F4;color:#fff;'
+                f'padding:12px 24px;border-radius:6px;text-decoration:none;'
+                f'font-weight:600;margin-top:12px">🔐 Autorizar con Google</a>',
+                unsafe_allow_html=True)
+            st.caption("Se abrirá el consentimiento de Google. Al aceptar, "
+                       "vuelves aquí automáticamente.")
+        except Exception as exc:
+            st.error(f"Error construyendo URL: {exc}")

@@ -16,6 +16,11 @@ plotly>=5.20.0
 openpyxl>=3.1.2
 reportlab>=4.0.0
 
+# Google Drive + Gmail (Purchase Orders Fase 2)
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+
 # Data
 pandas>=2.2.0
 
