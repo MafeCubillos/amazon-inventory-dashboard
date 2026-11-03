@@ -22,6 +22,7 @@ from backend.google_oauth import (
     is_connected, save_client,
 )
 from backend.google_services import create_gmail_draft, upload_po_to_drive
+from backend.po_auto_draft import scan_and_create_drafts, send_draft_alert_email
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -60,6 +61,8 @@ def render_purchase_orders_page():
 # Historial
 # ─────────────────────────────────────────────────────────────────────
 def _render_list():
+    _render_auto_scan_banner()
+
     pos = list_purchase_orders()
     pos = [p for p in pos if p.get("status") != "cancelled"
            or p.get("notes", "").lower().find("placeholder") < 0]
@@ -386,11 +389,22 @@ def _render_products():
             help=("ID de la carpeta de Drive donde guardar las POs de este producto. "
                   "Lo sacas de la URL: drive.google.com/drive/folders/[este-id]"))
 
+        asins_text = st.text_input(
+            "ASINs de Amazon (separados por coma)",
+            value=", ".join((current or {}).get("asins") or []),
+            key="prod_asins",
+            help=("ASINs del producto en cada marketplace (ES, FR, IT, DE…). "
+                  "Se usan para que el auto-draft de Fase 3 sepa qué producto "
+                  "del catálogo corresponde a cada sugerencia de Reorder. "
+                  "Ej: B0C1234567, B0C7654321"))
+
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar producto", type="primary", key="prod_save"):
             if not name.strip() or not desc.strip():
                 st.error("Nombre y descripción son obligatorios.")
             else:
+                asins_list = [a.strip().upper() for a in asins_text.split(",")
+                              if a.strip()]
                 data = {
                     "name":                name.strip(),
                     "description":         desc.strip(),
@@ -400,6 +414,7 @@ def _render_products():
                                            if sup_pick != "(ninguno)" else None,
                     "active":              active,
                     "drive_folder_id":     drive_folder.strip() or None,
+                    "asins":               asins_list,
                 }
                 if current:
                     data["id"] = current["id"]
@@ -628,3 +643,45 @@ dashboard puede subir PDFs a Drive y crear borradores en Gmail por ti.
                        "Al aceptar, Google te redirige al dashboard conectado.")
         except Exception as exc:
             st.error(f"Error construyendo URL: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Fase 3: scan Reorder → draft POs → email alert
+# ─────────────────────────────────────────────────────────────────────
+def _render_auto_scan_banner():
+    with st.expander("🤖 Escaneo automático desde Reorder (Fase 3)", expanded=False):
+        st.caption(
+            "Revisa las sugerencias de Reorder, agrupa por producto del "
+            "catálogo (vía ASINs) y crea un draft para cada producto "
+            "cuya cantidad sugerida ≥ 70% × MOQ. Después te manda un "
+            "email con el resumen.")
+        c1, c2 = st.columns([3, 2])
+        threshold = c1.slider(
+            "Umbral (porcentaje del MOQ para disparar un draft)",
+            min_value=10, max_value=100, value=70, step=5,
+            key="auto_threshold")
+        if c2.button("🔄 Escanear ahora", type="primary",
+                     use_container_width=True, key="auto_scan"):
+            if not is_connected():
+                st.warning("Conecta Google primero (tab 🔗 Google) para "
+                           "enviar el email de resumen.")
+            with st.spinner("Escaneando reorder_alerts y creando drafts..."):
+                drafts = scan_and_create_drafts(threshold_pct=threshold / 100)
+            if not drafts:
+                st.info("Ningún producto cumple el umbral (o ya tienen "
+                        "drafts abiertos). Todo en orden ✨")
+            else:
+                st.success(f"✅ Creados {len(drafts)} drafts nuevos:")
+                for d in drafts:
+                    st.markdown(
+                        f"- **PO #{d['po']['po_number']}** · {d['product']['name']} · "
+                        f"{d['final_qty']:,} ud "
+                        f"(sugerido {d['suggested_qty']:,}, MOQ "
+                        f"{int(d['product']['moq'])})")
+                if is_connected():
+                    ok, msg = send_draft_alert_email(drafts)
+                    if ok:
+                        st.success(f"📧 {msg}")
+                    else:
+                        st.error(msg)
+                st.rerun()
