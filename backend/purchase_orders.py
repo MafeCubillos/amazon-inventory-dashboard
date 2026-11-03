@@ -114,7 +114,88 @@ def create_purchase_order(*,
         })
     if item_rows:
         db_admin.table("po_order_items").insert(item_rows).execute()
-    return get_purchase_order(po_id)
+    po_full = get_purchase_order(po_id)
+    _sync_to_legacy_orders(po_full)
+    return po_full
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Legacy Orders page bridge
+#   The dashboard's existing "Orders" page reads from the legacy
+#   `purchase_orders` table (one row per PO × ASIN). Mirror new POs
+#   there so a PO created in the Purchase Orders page shows up in
+#   Orders too. One legacy row per (line_item × product.asin).
+# ─────────────────────────────────────────────────────────────────────
+
+_STATUS_MAP = {"draft": "draft", "sent": "ordered",
+               "received": "received", "cancelled": "cancelled"}
+
+
+def _sync_to_legacy_orders(po: dict) -> None:
+    if not po:
+        return
+    sup = po.get("supplier") or {}
+    status = _STATUS_MAP.get(po.get("status", "draft"), "ordered")
+    po_num = str(po["po_number"])
+
+    # Pull per-item ASINs from po_products by matching the first line of
+    # each item's description with the product's name. Keeps it loose so
+    # it still works for manual items that aren't in the catalog.
+    first_lines = [((it.get("description") or "").splitlines() or [""])[0].strip()
+                   for it in (po.get("items") or [])]
+    first_lines = [s for s in first_lines if s]
+    products_by_name: dict[str, dict] = {}
+    if first_lines:
+        rows = (db_admin.table("po_products")
+                .select("name,asins")
+                .in_("name", first_lines)
+                .execute().data) or []
+        for r in rows:
+            products_by_name[r["name"]] = r
+
+    legacy_rows: list[dict] = []
+    for it in (po.get("items") or []):
+        qty  = float(it.get("quantity") or 0)
+        unit = float(it.get("unit_price") or 0)
+        name_line = ((it.get("description") or "").splitlines() or [""])[0].strip()
+        p = products_by_name.get(name_line) or {}
+        asins = (p.get("asins") or []) or [""]        # at least one placeholder
+        # Split qty across ASINs equally (int rounding; last ASIN absorbs rest)
+        n = len(asins)
+        base = int(qty // n)
+        rows_qty = [base] * n
+        rows_qty[-1] += int(qty - base * n)
+        cost_total = round(qty * unit, 2)
+        cost_each  = round(cost_total / n, 2) if n > 1 else cost_total
+
+        for i, asin in enumerate(asins):
+            legacy_rows.append({
+                "po_number":     po_num,
+                "po_date":       str(po.get("po_date") or ""),
+                "asin":          (asin or "").strip(),
+                "product_name":  name_line or "(sin descripción)",
+                "supplier":      sup.get("name"),
+                "units_ordered": rows_qty[i],
+                "cost_eur":      cost_each if i < n - 1 else round(cost_total - cost_each * (n - 1), 2),
+                "status":        status,
+                "notes":         f"Auto-sync desde Purchase Orders · PO #{po_num}",
+            })
+
+    if not legacy_rows:
+        return
+    # Remove any existing legacy rows for this po_number before re-inserting,
+    # so re-saves don't duplicate.
+    try:
+        db_admin.table("purchase_orders").delete().eq("po_number", po_num).execute()
+    except Exception:
+        pass
+    try:
+        db_admin.table("purchase_orders").insert(legacy_rows).execute()
+    except Exception as exc:
+        # Soft-fail: a new PO still exists in po_orders even if the mirror fails.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Legacy purchase_orders sync failed for PO %s: %s", po_num, exc)
 
 
 def update_po_status(po_id: int, status: str) -> None:
@@ -122,9 +203,26 @@ def update_po_status(po_id: int, status: str) -> None:
         "status": status,
         "updated_at": datetime.utcnow().isoformat(),
     }).eq("id", po_id).execute()
+    # Mirror status change to the legacy Orders page too
+    po = get_purchase_order(po_id)
+    if po:
+        legacy_status = _STATUS_MAP.get(status, "ordered")
+        try:
+            db_admin.table("purchase_orders").update({
+                "status": legacy_status,
+            }).eq("po_number", str(po["po_number"])).execute()
+        except Exception:
+            pass
 
 
 def delete_po(po_id: int) -> None:
+    po = get_purchase_order(po_id)
+    if po:
+        try:
+            db_admin.table("purchase_orders").delete().eq(
+                "po_number", str(po["po_number"])).execute()
+        except Exception:
+            pass
     db_admin.table("po_orders").delete().eq("id", po_id).execute()
 
 
