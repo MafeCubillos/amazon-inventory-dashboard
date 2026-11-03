@@ -109,16 +109,25 @@ def _find_folder_for_po(po: dict) -> str | None:
 # ─────────────────────────────────────────────────────────────────────
 
 _DEFAULT_SUBJECT = "Orden de compra #{po_number} — Monvita Wellness Group"
-_DEFAULT_BODY = """Buenos días,
+_DEFAULT_BODY = """Hola {contact},
 
-Adjunto encontrarán nuestra orden de compra #{po_number} por un total de {total}.
+Te envío adjunto nueva orden de compra:
 
-Agradecemos confirmación de recepción, condiciones y fecha estimada de entrega.
+{items_lines}
 
-Muchas gracias,
-María Fernanda Cubillos
-Monvita Wellness Group S.L.
+Mil gracias!
+Saludos.
 """
+
+
+def _item_short_name(desc: str) -> str:
+    """First non-empty line of the description — our products put the
+    short name there (e.g. 'SAW PALMETTO HAIR')."""
+    for ln in (desc or "").splitlines():
+        s = ln.strip()
+        if s:
+            return s
+    return "producto"
 
 
 def create_gmail_draft(po_id: int, to_email: str | None = None,
@@ -138,15 +147,16 @@ def create_gmail_draft(po_id: int, to_email: str | None = None,
                        "Añádelo en el tab 🏢 Proveedores."), None
 
     items = po.get("items") or []
-    subtotal = sum(float(it.get("line_total") or
-                         float(it["quantity"]) * float(it["unit_price"]))
-                   for it in items)
-    iva = round(subtotal * float(po["iva_rate"]) / 100.0, 2)
-    total_str = f"{subtotal + iva:,.2f} {po.get('currency','EUR')}"
+    items_lines = "\n".join(
+        f"- OC {po['po_number']}: {_item_short_name(it.get('description',''))} "
+        f"({int(float(it['quantity'])) if float(it['quantity']).is_integer() else it['quantity']} unid)"
+        for it in items
+    ) or f"- OC {po['po_number']}"
 
+    contact_name = (sup.get("contact_name") or "").strip() or "equipo"
     subject = subject or _DEFAULT_SUBJECT.format(po_number=po["po_number"])
-    body    = body    or _DEFAULT_BODY.format(po_number=po["po_number"],
-                                              total=total_str)
+    body    = body    or _DEFAULT_BODY.format(contact=contact_name,
+                                              items_lines=items_lines)
 
     # Build MIME message with PDF attachment
     msg = MIMEMultipart()

@@ -436,7 +436,7 @@ def _render_suppliers():
         # supplier never bleed into another one.
         def _on_sup_change():
             for k in ("sup_name", "sup_address", "sup_nif",
-                      "sup_phone", "sup_email", "sup_web"):
+                      "sup_phone", "sup_email", "sup_web", "sup_contact"):
                 st.session_state.pop(k, None)
 
         sup_pick = st.selectbox(
@@ -450,7 +450,8 @@ def _render_suppliers():
         for state_key, src_key in [("sup_name", "name"),
                                     ("sup_address", "address_lines"),
                                     ("sup_nif", "nif"), ("sup_phone", "phone"),
-                                    ("sup_email", "email"), ("sup_web", "web")]:
+                                    ("sup_email", "email"), ("sup_web", "web"),
+                                    ("sup_contact", "contact_name")]:
             if state_key not in st.session_state:
                 st.session_state[state_key] = (current or {}).get(src_key, "") or ""
 
@@ -462,6 +463,10 @@ def _render_suppliers():
         c3, c4 = st.columns(2)
         email = c3.text_input("Email",    key="sup_email")
         web   = c4.text_input("Web",      key="sup_web")
+        contact = st.text_input(
+            "Nombre de contacto (para el saludo del email)",
+            key="sup_contact",
+            help="Ej: 'Javier'. Se usará como 'Hola Javier,' en el borrador de email.")
 
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar proveedor", type="primary", key="sup_save"):
@@ -473,7 +478,8 @@ def _render_suppliers():
                         "nif": nif.strip() or None,
                         "phone": phone.strip() or None,
                         "email": email.strip() or None,
-                        "web": web.strip() or None}
+                        "web": web.strip() or None,
+                        "contact_name": contact.strip() or None}
                 if current:
                     data["id"] = current["id"]
                 upsert_supplier(data)
