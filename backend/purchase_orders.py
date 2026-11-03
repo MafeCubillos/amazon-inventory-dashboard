@@ -131,9 +131,10 @@ _STATUS_MAP = {"draft": "draft", "sent": "ordered",
                "received": "received", "cancelled": "cancelled"}
 
 
-def _sync_to_legacy_orders(po: dict) -> None:
+def _sync_to_legacy_orders(po: dict) -> tuple[bool, str]:
+    """Returns (ok, message). Message describes what happened for the UI."""
     if not po:
-        return
+        return True, "No PO to sync."
     sup = po.get("supplier") or {}
     status = _STATUS_MAP.get(po.get("status", "draft"), "ordered")
     po_num = str(po["po_number"])
@@ -182,32 +183,32 @@ def _sync_to_legacy_orders(po: dict) -> None:
             })
 
     if not legacy_rows:
-        return
+        return True, "PO sin items para mirrorar."
     # Remove any existing legacy rows for this po_number before re-inserting,
     # so re-saves don't duplicate.
     try:
         db_admin.table("purchase_orders").delete().eq("po_number", po_num).execute()
-    except Exception:
-        pass
+    except Exception as exc:
+        return False, f"Error borrando filas legacy existentes: {exc}"
     try:
         db_admin.table("purchase_orders").insert(legacy_rows).execute()
     except Exception as exc:
-        # Soft-fail: a new PO still exists in po_orders even if the mirror fails.
         import logging
         logging.getLogger(__name__).warning(
             "Legacy purchase_orders sync failed for PO %s: %s", po_num, exc)
+        return False, f"Error insertando en legacy: {exc}"
+    return True, f"{len(legacy_rows)} fila(s) mirroreadas a Orders."
 
 
-def update_po_status(po_id: int, status: str) -> None:
+def update_po_status(po_id: int, status: str) -> tuple[bool, str]:
     db_admin.table("po_orders").update({
         "status": status,
         "updated_at": datetime.utcnow().isoformat(),
     }).eq("id", po_id).execute()
-    # Mirror the full PO (insert if missing, else replace) to the legacy
-    # Orders page — update-only would miss POs created before the sync existed.
     po = get_purchase_order(po_id)
     if po:
-        _sync_to_legacy_orders(po)
+        return _sync_to_legacy_orders(po)
+    return True, "Estado guardado."
 
 
 def delete_po(po_id: int) -> None:

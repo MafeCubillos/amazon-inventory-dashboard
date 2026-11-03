@@ -172,9 +172,13 @@ def _render_po_detail(po: dict):
                                     .index(po["status"]),
                               key=f"status_{po['id']}")
     if c2.button("💾 Guardar estado", key=f"save_status_{po['id']}"):
-        update_po_status(po["id"], new_status)
-        st.success("Actualizado.")
-        st.rerun()
+        ok, msg = update_po_status(po["id"], new_status)
+        if ok:
+            st.success(f"Actualizado. {msg}")
+            st.rerun()
+        else:
+            # Don't rerun on error so María can read the real exception
+            st.error(f"Estado guardado en Purchase Orders, pero fallo al sincronizar con Orders:\n\n{msg}")
     if c3.button("🗑️ Eliminar", key=f"del_{po['id']}"):
         delete_po(po["id"])
         st.success(f"PO #{po['po_number']} eliminada.")
