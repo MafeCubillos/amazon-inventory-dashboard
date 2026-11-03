@@ -515,11 +515,12 @@ def _handle_oauth_callback():
         return
     try:
         exchange_code(code, _get_app_redirect_uri())
-        st.success("✅ Google conectado correctamente.")
+        st.toast("✅ Google conectado correctamente.", icon="✅")
     except Exception as exc:
         st.error(f"No se pudo completar la autorización: {exc}")
-    # Clear the query so a refresh doesn't retry
+    # Clear the query and rerun cleanly so the tabs render only once.
     st.query_params.clear()
+    st.rerun()
 
 
 def _render_google():
