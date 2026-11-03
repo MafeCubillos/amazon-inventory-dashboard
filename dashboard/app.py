@@ -897,6 +897,7 @@ def render_sidebar():
         current = st.session_state.get("page", "inventory")
         nav_items = [("📦", "Inventory",       "inventory"),
                      ("🚚", "Reorder",        "reorder"),
+                     ("🧾", "Órdenes compra", "purchase_orders"),
                      ("📋", "Orders",         "orders"),
                      ("🏷️", "Labels",         "labels"),
                      ("🏠", "Local Stock",    "local"),
@@ -4687,6 +4688,11 @@ elif page == "tiktok":
 elif page == "finance":
     from dashboard.finance_page import render_finance_page
     render_finance_page()
+
+# ════════ PAGE: PURCHASE ORDERS ════════
+elif page == "purchase_orders":
+    from dashboard.purchase_orders_page import render_purchase_orders_page
+    render_purchase_orders_page()
 
 # ════════ PAGE: FORECAST ════════
 elif page == "forecast":
