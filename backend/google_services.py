@@ -123,6 +123,14 @@ Monvita Wellness Group S.L.
 """
 
 
+def _get_cc_list() -> list[str]:
+    """Comma-separated CC emails from po_company_profile.cc_emails."""
+    rows = (db_admin.table("po_company_profile")
+            .select("cc_emails").eq("id", 1).limit(1).execute().data) or []
+    raw = (rows[0].get("cc_emails") or "") if rows else ""
+    return [e.strip() for e in raw.split(",") if e.strip()]
+
+
 def _item_short_name(desc: str) -> str:
     """First non-empty line of the description — our products put the
     short name there (e.g. 'SAW PALMETTO HAIR')."""
@@ -164,6 +172,9 @@ def create_gmail_draft(po_id: int, to_email: str | None = None,
     # Build MIME message with PDF attachment
     msg = MIMEMultipart()
     msg["to"]      = to_email
+    cc_list = _get_cc_list()
+    if cc_list:
+        msg["cc"]  = ", ".join(cc_list)
     msg["subject"] = subject
     msg.attach(MIMEText(body, "plain", "utf-8"))
 

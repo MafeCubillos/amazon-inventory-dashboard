@@ -510,10 +510,17 @@ def _render_company():
                            index=0 if comp.get("currency", "EUR") == "EUR" else 1,
                            key="co_currency")
 
+    cc = st.text_input(
+        "Emails en copia (CC) para todos los borradores a proveedores",
+        value=comp.get("cc_emails", "") or "",
+        key="co_cc",
+        help="Separa varios con coma. Ej: carlos.zuniga@monvita.co, otro@monvita.co")
+
     if st.button("💾 Guardar", type="primary", key="co_save"):
         update_company_profile({"name": name, "address_lines": address,
                                  "cif": cif, "phone": phone or None,
-                                 "email": email or None, "currency": curr})
+                                 "email": email or None, "currency": curr,
+                                 "cc_emails": cc.strip() or None})
         st.success("Guardado.")
         st.rerun()
 
