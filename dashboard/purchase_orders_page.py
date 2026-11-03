@@ -586,12 +586,12 @@ dashboard puede subir PDFs a Drive y crear borradores en Gmail por ti.
         try:
             auth_url = build_auth_url(_get_app_redirect_uri())
             st.markdown(
-                f'<a href="{auth_url}" target="_self" '
+                f'<a href="{auth_url}" target="_blank" rel="noopener" '
                 f'style="display:inline-block;background:#4285F4;color:#fff;'
                 f'padding:12px 24px;border-radius:6px;text-decoration:none;'
-                f'font-weight:600;margin-top:12px">🔐 Autorizar con Google</a>',
+                f'font-weight:600;margin-top:12px">🔐 Autorizar con Google (nueva pestaña)</a>',
                 unsafe_allow_html=True)
-            st.caption("Se abrirá el consentimiento de Google. Al aceptar, "
-                       "vuelves aquí automáticamente.")
+            st.caption("Se abre el consentimiento de Google en una nueva pestaña. "
+                       "Al aceptar, Google te redirige al dashboard conectado.")
         except Exception as exc:
             st.error(f"Error construyendo URL: {exc}")
