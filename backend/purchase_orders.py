@@ -154,14 +154,32 @@ def _sync_to_legacy_orders(po: dict) -> tuple[bool, str]:
         for r in rows:
             products_by_name[r["name"]] = r
 
+    # The legacy purchase_orders table has a FK on asin → products(asin).
+    # Load the valid ASINs once so we can filter.
+    try:
+        valid_rows = (db_admin.table("products").select("asin").execute().data) or []
+        valid_asins = {r["asin"] for r in valid_rows if r.get("asin")}
+    except Exception as exc:
+        return False, f"No pude leer products para validar ASINs: {exc}"
+
     legacy_rows: list[dict] = []
+    missing_mapping: list[str] = []   # product names with no ASIN in catalog
+    missing_in_products: list[str] = []  # ASINs mapped but not in products table
+
     for it in (po.get("items") or []):
         qty  = float(it.get("quantity") or 0)
         unit = float(it.get("unit_price") or 0)
         name_line = ((it.get("description") or "").splitlines() or [""])[0].strip()
         p = products_by_name.get(name_line) or {}
-        asins = (p.get("asins") or []) or [""]        # at least one placeholder
-        # Split qty across ASINs equally (int rounding; last ASIN absorbs rest)
+        raw_asins = [a.strip() for a in (p.get("asins") or []) if (a or "").strip()]
+        if not raw_asins:
+            missing_mapping.append(name_line or "(sin nombre)")
+            continue
+        asins = [a for a in raw_asins if a in valid_asins]
+        missing_in_products.extend(a for a in raw_asins if a not in valid_asins)
+        if not asins:
+            continue
+
         n = len(asins)
         base = int(qty // n)
         rows_qty = [base] * n
@@ -173,7 +191,7 @@ def _sync_to_legacy_orders(po: dict) -> tuple[bool, str]:
             legacy_rows.append({
                 "po_number":     po_num,
                 "po_date":       str(po.get("po_date") or ""),
-                "asin":          (asin or "").strip(),
+                "asin":          asin,
                 "product_name":  name_line or "(sin descripción)",
                 "supplier":      sup.get("name"),
                 "units_ordered": rows_qty[i],
@@ -183,7 +201,13 @@ def _sync_to_legacy_orders(po: dict) -> tuple[bool, str]:
             })
 
     if not legacy_rows:
-        return True, "PO sin items para mirrorar."
+        parts = []
+        if missing_mapping:
+            parts.append(f"Sin ASINs en catálogo: {', '.join(set(missing_mapping))}. "
+                         "Añádelos en el tab 📦 Productos.")
+        if missing_in_products:
+            parts.append(f"ASINs mapeados pero no existen en products: {', '.join(set(missing_in_products))}.")
+        return False, " | ".join(parts) or "PO sin items para mirrorar."
     # Remove any existing legacy rows for this po_number before re-inserting,
     # so re-saves don't duplicate.
     try:
