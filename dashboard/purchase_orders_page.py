@@ -333,19 +333,30 @@ def _render_products():
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     with st.expander("➕ Añadir o editar producto"):
+        def _on_prod_change():
+            for k in ("prod_name", "prod_desc", "prod_drive"):
+                st.session_state.pop(k, None)
+
         prod_labels = ["— nuevo —"] + [
             f"{p['name']}  —  {p.get('supplier_name','—')}" for p in products]
         pick = st.selectbox("Editar existente (o '— nuevo —' para crear)",
-                             prod_labels, key="prod_edit_pick")
+                             prod_labels, key="prod_edit_pick",
+                             on_change=_on_prod_change)
         current = None
         if pick != "— nuevo —":
             idx = prod_labels.index(pick) - 1
             current = products[idx]
 
-        name = st.text_input("Nombre corto", value=(current or {}).get("name", ""),
-                              key="prod_name")
+        # Seed state on first show / after switch
+        if "prod_name" not in st.session_state:
+            st.session_state["prod_name"] = (current or {}).get("name", "")
+        if "prod_desc" not in st.session_state:
+            st.session_state["prod_desc"] = (current or {}).get("description", "")
+        if "prod_drive" not in st.session_state:
+            st.session_state["prod_drive"] = (current or {}).get("drive_folder_id", "") or ""
+
+        name = st.text_input("Nombre corto", key="prod_name")
         desc = st.text_area("Descripción completa (va al PDF)",
-                             value=(current or {}).get("description", ""),
                              height=160, key="prod_desc",
                              help="Usa saltos de línea para la composición.")
         c1, c2, c3 = st.columns(3)
@@ -371,7 +382,6 @@ def _render_products():
                               key="prod_active")
         drive_folder = st.text_input(
             "Drive folder ID (opcional)",
-            value=(current or {}).get("drive_folder_id", "") or "",
             key="prod_drive",
             help=("ID de la carpeta de Drive donde guardar las POs de este producto. "
                   "Lo sacas de la URL: drive.google.com/drive/folders/[este-id]"))
@@ -422,27 +432,36 @@ def _render_suppliers():
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     with st.expander("➕ Añadir o editar proveedor"):
+        # Reset field state when the dropdown switches so edits of one
+        # supplier never bleed into another one.
+        def _on_sup_change():
+            for k in ("sup_name", "sup_address", "sup_nif",
+                      "sup_phone", "sup_email", "sup_web"):
+                st.session_state.pop(k, None)
+
         sup_pick = st.selectbox(
             "Editar existente (o déjalo en blanco para crear nuevo)",
             ["— nuevo —"] + [s["name"] for s in suppliers],
-            key="sup_edit_pick")
+            key="sup_edit_pick", on_change=_on_sup_change)
         current = next((s for s in suppliers if s["name"] == sup_pick), None)
 
-        name    = st.text_input("Nombre", value=(current or {}).get("name", ""),
-                                 key="sup_name")
-        address = st.text_area("Dirección (una línea por fila)",
-                                value=(current or {}).get("address_lines", "") or "",
-                                key="sup_address")
+        # Pre-seed session_state the first time a supplier is selected,
+        # so text_inputs reflect its data; subsequent edits are preserved.
+        for state_key, src_key in [("sup_name", "name"),
+                                    ("sup_address", "address_lines"),
+                                    ("sup_nif", "nif"), ("sup_phone", "phone"),
+                                    ("sup_email", "email"), ("sup_web", "web")]:
+            if state_key not in st.session_state:
+                st.session_state[state_key] = (current or {}).get(src_key, "") or ""
+
+        name    = st.text_input("Nombre",                               key="sup_name")
+        address = st.text_area("Dirección (una línea por fila)",        key="sup_address")
         c1, c2 = st.columns(2)
-        nif   = c1.text_input("NIF/CIF",  value=(current or {}).get("nif", "") or "",
-                              key="sup_nif")
-        phone = c2.text_input("Teléfono", value=(current or {}).get("phone", "") or "",
-                              key="sup_phone")
+        nif   = c1.text_input("NIF/CIF",  key="sup_nif")
+        phone = c2.text_input("Teléfono", key="sup_phone")
         c3, c4 = st.columns(2)
-        email = c3.text_input("Email", value=(current or {}).get("email", "") or "",
-                              key="sup_email")
-        web   = c4.text_input("Web",   value=(current or {}).get("web", "")   or "",
-                              key="sup_web")
+        email = c3.text_input("Email",    key="sup_email")
+        web   = c4.text_input("Web",      key="sup_web")
 
         c1, c2 = st.columns(2)
         if c1.button("💾 Guardar proveedor", type="primary", key="sup_save"):
