@@ -115,8 +115,11 @@ Te envío adjunto nueva orden de compra:
 
 {items_lines}
 
-Mil gracias!
-Saludos.
+¡Mil gracias!
+Saludos,
+
+María Fernanda Cubillos
+Monvita Wellness Group S.L.
 """
 
 
