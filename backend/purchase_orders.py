@@ -335,12 +335,10 @@ def render_po_pdf(po: dict) -> bytes:
 
     meta_tbl = Table([
         [Paragraph("Fecha",             S["lbl"]),
-         Paragraph("Factura",           S["lbl"]),
          Paragraph("Numero de orden",   S["lbl"])],
         [Paragraph(po_date_str,                     S["val"]),
-         Paragraph(po.get("invoice_ref") or "",     S["val"]),
          Paragraph(str(po["po_number"]),            S["val"])],
-    ], colWidths=[55*mm, 55*mm, 55*mm])
+    ], colWidths=[85*mm, 80*mm])
     meta_tbl.setStyle(TableStyle([
         ("VALIGN", (0,0), (-1,-1), "TOP"),
         ("LEFTPADDING",  (0,0), (-1,-1), 0),

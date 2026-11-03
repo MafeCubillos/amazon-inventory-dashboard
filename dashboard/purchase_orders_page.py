@@ -143,11 +143,11 @@ def _render_new():
                             key="new_po_supplier")
     sup_id = sup_names[sup_pick]
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     po_date = c1.date_input("Fecha", value=date.today(), key="new_po_date")
-    invoice_ref = c2.text_input("Factura (opcional)", key="new_po_invoice")
-    iva_rate = c3.number_input("IVA %", value=10.0, min_value=0.0,
+    iva_rate = c2.number_input("IVA %", value=10.0, min_value=0.0,
                                max_value=25.0, step=0.5, key="new_po_iva")
+    invoice_ref = None
 
     # ── Items session-state buffer (so Add-from-catalog can push rows) ─
     key_items = "new_po_items_df"
