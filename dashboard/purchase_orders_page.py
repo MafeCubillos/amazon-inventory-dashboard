@@ -11,10 +11,11 @@ import streamlit as st
 from datetime import date
 
 from backend.purchase_orders import (
-    create_purchase_order, delete_po, get_company_profile,
-    get_purchase_order, list_purchase_orders, list_suppliers,
-    next_po_number, render_po_pdf, update_company_profile,
-    update_po_status, upsert_supplier, delete_supplier,
+    create_purchase_order, delete_po, delete_product, delete_supplier,
+    get_company_profile, get_purchase_order, list_products,
+    list_purchase_orders, list_suppliers, next_po_number, render_po_pdf,
+    update_company_profile, update_po_status, upsert_product,
+    upsert_supplier,
 )
 
 
@@ -22,9 +23,10 @@ from backend.purchase_orders import (
 def render_purchase_orders_page():
     st.title("🧾 Órdenes de compra")
 
-    tab_list, tab_new, tab_suppliers, tab_company = st.tabs([
+    tab_list, tab_new, tab_products, tab_suppliers, tab_company = st.tabs([
         "📋 Historial",
         "➕ Nueva orden",
+        "📦 Productos",
         "🏢 Proveedores",
         "⚙️ Datos de empresa",
     ])
@@ -33,6 +35,8 @@ def render_purchase_orders_page():
         _render_list()
     with tab_new:
         _render_new()
+    with tab_products:
+        _render_products()
     with tab_suppliers:
         _render_suppliers()
     with tab_company:
@@ -145,18 +149,48 @@ def _render_new():
     iva_rate = c3.number_input("IVA %", value=10.0, min_value=0.0,
                                max_value=25.0, step=0.5, key="new_po_iva")
 
-    st.markdown("##### 📦 Items")
-    st.caption("Edita las filas. Cantidad × Precio unitario = Precio total "
-               "(se calcula al guardar).")
+    # ── Items session-state buffer (so Add-from-catalog can push rows) ─
+    key_items = "new_po_items_df"
+    if key_items not in st.session_state:
+        st.session_state[key_items] = pd.DataFrame(
+            [{"Descripción": "", "Cantidad": 0, "Precio Unit": 0.0}])
 
-    default_items = pd.DataFrame([
-        {"Descripción": "", "Cantidad": 0, "Precio Unit": 0.0},
-    ])
+    # ── Catalog picker: pick one product → appends a prefilled row ────
+    products = list_products(supplier_id=sup_id)
+    st.markdown("##### 📦 Items")
+    if products:
+        colA, colB = st.columns([4, 1])
+        prod_labels = {f"{p['name']}  — MOQ {int(p['moq'])} · {p['unit_price']:.2f} €": p
+                       for p in products}
+        pick = colA.selectbox("Añadir desde catálogo",
+                              ["— elige un producto —"] + list(prod_labels.keys()),
+                              key="new_po_prod_pick")
+        if colB.button("➕ Añadir", key="new_po_prod_add", use_container_width=True):
+            if pick != "— elige un producto —":
+                p = prod_labels[pick]
+                new_row = pd.DataFrame([{
+                    "Descripción": p["description"],
+                    "Cantidad":    float(p["moq"]),
+                    "Precio Unit": float(p["unit_price"]),
+                }])
+                # Drop a leading empty row if present
+                buf = st.session_state[key_items]
+                mask_empty = (buf["Descripción"].astype(str).str.strip() == "")
+                buf = buf[~mask_empty] if mask_empty.all() else buf
+                st.session_state[key_items] = pd.concat(
+                    [buf, new_row], ignore_index=True)
+                st.rerun()
+    else:
+        st.caption(f"ℹ️ No hay productos cargados para **{sup_pick}**. "
+                   f"Añádelos en el tab **📦 Productos**.")
+
+    st.caption("Edita las filas. Puedes modificar cantidad y precio si cambian.")
+
     edited = st.data_editor(
-        default_items,
+        st.session_state[key_items],
         num_rows="dynamic",
         use_container_width=True,
-        key="new_po_items",
+        key="new_po_items_editor",
         column_config={
             "Descripción": st.column_config.TextColumn(
                 "Descripción", width="large",
@@ -167,6 +201,7 @@ def _render_new():
                 "Precio Und", min_value=0.0, step=0.01, format="%.4f"),
         },
     )
+    st.session_state[key_items] = edited
 
     # Live preview totals
     valid = edited[edited["Descripción"].astype(str).str.strip() != ""]
@@ -201,6 +236,9 @@ def _render_new():
         )
         st.success(f"✅ PO #{po['po_number']} creada.")
         st.balloons()
+        # Reset the items buffer for the next PO
+        st.session_state[key_items] = pd.DataFrame(
+            [{"Descripción": "", "Cantidad": 0, "Precio Unit": 0.0}])
 
         # Offer the PDF right away
         try:
@@ -214,6 +252,95 @@ def _render_new():
             )
         except ModuleNotFoundError:
             st.warning("PDF no generado: falta `reportlab` en requirements.")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Productos
+# ─────────────────────────────────────────────────────────────────────
+def _render_products():
+    products = list_products(only_active=False)
+    suppliers = list_suppliers()
+    sup_by_id = {s["id"]: s["name"] for s in suppliers}
+
+    st.caption(f"{len(products)} producto(s) en catálogo. "
+               "En **Nueva orden**, elige el proveedor y luego el producto "
+               "para precargar una fila con descripción, MOQ y precio.")
+
+    if products:
+        df = pd.DataFrame([{
+            "ID":          p["id"],
+            "Nombre":      p["name"],
+            "Proveedor":   p.get("supplier_name") or "—",
+            "MOQ":         p["moq"],
+            "Precio":      p["unit_price"],
+            "Activo":      "✓" if p.get("active") else "—",
+            "Descripción (resumen)": (p["description"][:80] + "…"
+                                       if len(p["description"]) > 80
+                                       else p["description"]).replace("\n", " · "),
+        } for p in products])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with st.expander("➕ Añadir o editar producto"):
+        prod_labels = ["— nuevo —"] + [
+            f"{p['name']}  —  {p.get('supplier_name','—')}" for p in products]
+        pick = st.selectbox("Editar existente (o '— nuevo —' para crear)",
+                             prod_labels, key="prod_edit_pick")
+        current = None
+        if pick != "— nuevo —":
+            idx = prod_labels.index(pick) - 1
+            current = products[idx]
+
+        name = st.text_input("Nombre corto", value=(current or {}).get("name", ""),
+                              key="prod_name")
+        desc = st.text_area("Descripción completa (va al PDF)",
+                             value=(current or {}).get("description", ""),
+                             height=160, key="prod_desc",
+                             help="Usa saltos de línea para la composición.")
+        c1, c2, c3 = st.columns(3)
+        price = c1.number_input("Precio unitario (€)",
+                                 value=float((current or {}).get("unit_price") or 0),
+                                 min_value=0.0, step=0.01, format="%.4f",
+                                 key="prod_price")
+        moq   = c2.number_input("MOQ (cantidad mínima)",
+                                 value=float((current or {}).get("moq") or 0),
+                                 min_value=0.0, step=1.0, format="%g",
+                                 key="prod_moq")
+        sup_options = {s["name"]: s["id"] for s in suppliers}
+        sup_names_list = ["(ninguno)"] + list(sup_options.keys())
+        default_sup = (sup_by_id.get((current or {}).get("default_supplier_id"))
+                       or "(ninguno)")
+        sup_pick = c3.selectbox("Proveedor por defecto",
+                                 sup_names_list,
+                                 index=sup_names_list.index(default_sup)
+                                       if default_sup in sup_names_list else 0,
+                                 key="prod_supplier")
+        active = st.checkbox("Activo (aparece en el selector de catálogo)",
+                              value=bool((current or {}).get("active", True)),
+                              key="prod_active")
+
+        c1, c2 = st.columns(2)
+        if c1.button("💾 Guardar producto", type="primary", key="prod_save"):
+            if not name.strip() or not desc.strip():
+                st.error("Nombre y descripción son obligatorios.")
+            else:
+                data = {
+                    "name":                name.strip(),
+                    "description":         desc.strip(),
+                    "unit_price":          price,
+                    "moq":                 moq,
+                    "default_supplier_id": sup_options.get(sup_pick)
+                                           if sup_pick != "(ninguno)" else None,
+                    "active":              active,
+                }
+                if current:
+                    data["id"] = current["id"]
+                upsert_product(data)
+                st.success("Guardado.")
+                st.rerun()
+        if current and c2.button("🗑️ Eliminar este producto", key="prod_delete"):
+            delete_product(current["id"])
+            st.success("Eliminado.")
+            st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────

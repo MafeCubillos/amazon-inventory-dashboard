@@ -158,6 +158,47 @@ def update_company_profile(data: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Products catalog
+# ─────────────────────────────────────────────────────────────────────
+
+def list_products(supplier_id: int | None = None,
+                  only_active: bool = True) -> list[dict]:
+    q = (db_admin.table("po_products")
+         .select("*, po_suppliers(name)")
+         .order("name"))
+    if supplier_id is not None:
+        q = q.eq("default_supplier_id", supplier_id)
+    if only_active:
+        q = q.eq("active", True)
+    rows = q.execute().data or []
+    for r in rows:
+        sup = r.pop("po_suppliers", None) or {}
+        r["supplier_name"] = sup.get("name", "—")
+    return rows
+
+
+def get_product(pid: int) -> dict | None:
+    rows = (db_admin.table("po_products")
+            .select("*").eq("id", pid).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def upsert_product(data: dict) -> dict:
+    data = {k: v for k, v in data.items() if v is not None or k == "default_supplier_id"}
+    if data.get("id"):
+        db_admin.table("po_products").update(
+            {k: v for k, v in data.items() if k != "id"}
+        ).eq("id", data["id"]).execute()
+        return get_product(data["id"])
+    row = (db_admin.table("po_products").insert(data).execute().data or [{}])[0]
+    return row
+
+
+def delete_product(pid: int) -> None:
+    db_admin.table("po_products").delete().eq("id", pid).execute()
+
+
+# ─────────────────────────────────────────────────────────────────────
 # PDF rendering (reportlab) — mirrors Monvita's sheet layout
 # ─────────────────────────────────────────────────────────────────────
 
