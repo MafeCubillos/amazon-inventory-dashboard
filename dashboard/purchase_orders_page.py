@@ -242,18 +242,24 @@ def _render_suppliers():
             key="sup_edit_pick")
         current = next((s for s in suppliers if s["name"] == sup_pick), None)
 
-        name    = st.text_input("Nombre", value=(current or {}).get("name", ""))
+        name    = st.text_input("Nombre", value=(current or {}).get("name", ""),
+                                 key="sup_name")
         address = st.text_area("Dirección (una línea por fila)",
-                                value=(current or {}).get("address_lines", ""))
+                                value=(current or {}).get("address_lines", "") or "",
+                                key="sup_address")
         c1, c2 = st.columns(2)
-        nif   = c1.text_input("NIF/CIF", value=(current or {}).get("nif", "") or "")
-        phone = c2.text_input("Teléfono", value=(current or {}).get("phone", "") or "")
+        nif   = c1.text_input("NIF/CIF",  value=(current or {}).get("nif", "") or "",
+                              key="sup_nif")
+        phone = c2.text_input("Teléfono", value=(current or {}).get("phone", "") or "",
+                              key="sup_phone")
         c3, c4 = st.columns(2)
-        email = c3.text_input("Email", value=(current or {}).get("email", "") or "")
-        web   = c4.text_input("Web",   value=(current or {}).get("web", "")   or "")
+        email = c3.text_input("Email", value=(current or {}).get("email", "") or "",
+                              key="sup_email")
+        web   = c4.text_input("Web",   value=(current or {}).get("web", "")   or "",
+                              key="sup_web")
 
         c1, c2 = st.columns(2)
-        if c1.button("💾 Guardar proveedor", type="primary"):
+        if c1.button("💾 Guardar proveedor", type="primary", key="sup_save"):
             if not name.strip():
                 st.error("El nombre es obligatorio.")
             else:
@@ -268,7 +274,7 @@ def _render_suppliers():
                 upsert_supplier(data)
                 st.success("Guardado.")
                 st.rerun()
-        if current and c2.button("🗑️ Eliminar este proveedor"):
+        if current and c2.button("🗑️ Eliminar este proveedor", key="sup_delete"):
             delete_supplier(current["id"])
             st.success("Eliminado.")
             st.rerun()
@@ -281,18 +287,19 @@ def _render_company():
     comp = get_company_profile()
     st.caption("Estos datos aparecen en la cabecera del PDF.")
 
-    name    = st.text_input("Nombre", value=comp.get("name", ""))
+    name    = st.text_input("Nombre", value=comp.get("name", ""), key="co_name")
     address = st.text_area("Dirección (una línea por fila)",
-                            value=comp.get("address_lines", ""))
+                            value=comp.get("address_lines", ""), key="co_address")
     c1, c2 = st.columns(2)
-    cif    = c1.text_input("CIF/NIF", value=comp.get("cif", ""))
-    phone  = c2.text_input("Teléfono", value=comp.get("phone", "") or "")
+    cif    = c1.text_input("CIF/NIF",  value=comp.get("cif", ""),       key="co_cif")
+    phone  = c2.text_input("Teléfono", value=comp.get("phone", "") or "", key="co_phone")
     c3, c4 = st.columns(2)
-    email  = c3.text_input("Email", value=comp.get("email", "") or "")
+    email  = c3.text_input("Email", value=comp.get("email", "") or "", key="co_email")
     curr   = c4.selectbox("Moneda", ["EUR", "USD"],
-                           index=0 if comp.get("currency", "EUR") == "EUR" else 1)
+                           index=0 if comp.get("currency", "EUR") == "EUR" else 1,
+                           key="co_currency")
 
-    if st.button("💾 Guardar", type="primary"):
+    if st.button("💾 Guardar", type="primary", key="co_save"):
         update_company_profile({"name": name, "address_lines": address,
                                  "cif": cif, "phone": phone or None,
                                  "email": email or None, "currency": curr})
