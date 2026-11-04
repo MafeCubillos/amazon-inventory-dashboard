@@ -340,8 +340,11 @@ def _render_products():
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     with st.expander("➕ Añadir o editar producto"):
+        _PROD_KEYS = ("prod_name", "prod_desc", "prod_drive", "prod_price",
+                      "prod_moq", "prod_supplier", "prod_active", "prod_asins")
+
         def _on_prod_change():
-            for k in ("prod_name", "prod_desc", "prod_drive"):
+            for k in _PROD_KEYS:
                 st.session_state.pop(k, None)
 
         prod_labels = ["— nuevo —"] + [
@@ -354,13 +357,29 @@ def _render_products():
             idx = prod_labels.index(pick) - 1
             current = products[idx]
 
-        # Seed state on first show / after switch
+        sup_options = {s["name"]: s["id"] for s in suppliers}
+        sup_names_list = ["(ninguno)"] + list(sup_options.keys())
+        default_sup = (sup_by_id.get((current or {}).get("default_supplier_id"))
+                       or "(ninguno)")
+
+        # Seed state on first show / after switch — every widget key, so
+        # switching between products refreshes the inputs properly.
         if "prod_name" not in st.session_state:
             st.session_state["prod_name"] = (current or {}).get("name", "")
         if "prod_desc" not in st.session_state:
             st.session_state["prod_desc"] = (current or {}).get("description", "")
         if "prod_drive" not in st.session_state:
             st.session_state["prod_drive"] = (current or {}).get("drive_folder_id", "") or ""
+        if "prod_price" not in st.session_state:
+            st.session_state["prod_price"] = float((current or {}).get("unit_price") or 0)
+        if "prod_moq" not in st.session_state:
+            st.session_state["prod_moq"] = float((current or {}).get("moq") or 0)
+        if "prod_supplier" not in st.session_state:
+            st.session_state["prod_supplier"] = default_sup
+        if "prod_active" not in st.session_state:
+            st.session_state["prod_active"] = bool((current or {}).get("active", True))
+        if "prod_asins" not in st.session_state:
+            st.session_state["prod_asins"] = ", ".join((current or {}).get("asins") or [])
 
         name = st.text_input("Nombre corto", key="prod_name")
         desc = st.text_area("Descripción completa (va al PDF)",
@@ -368,24 +387,14 @@ def _render_products():
                              help="Usa saltos de línea para la composición.")
         c1, c2, c3 = st.columns(3)
         price = c1.number_input("Precio unitario (€)",
-                                 value=float((current or {}).get("unit_price") or 0),
                                  min_value=0.0, step=0.01, format="%.4f",
                                  key="prod_price")
         moq   = c2.number_input("MOQ (cantidad mínima)",
-                                 value=float((current or {}).get("moq") or 0),
                                  min_value=0.0, step=1.0, format="%g",
                                  key="prod_moq")
-        sup_options = {s["name"]: s["id"] for s in suppliers}
-        sup_names_list = ["(ninguno)"] + list(sup_options.keys())
-        default_sup = (sup_by_id.get((current or {}).get("default_supplier_id"))
-                       or "(ninguno)")
         sup_pick = c3.selectbox("Proveedor por defecto",
-                                 sup_names_list,
-                                 index=sup_names_list.index(default_sup)
-                                       if default_sup in sup_names_list else 0,
-                                 key="prod_supplier")
+                                 sup_names_list, key="prod_supplier")
         active = st.checkbox("Activo (aparece en el selector de catálogo)",
-                              value=bool((current or {}).get("active", True)),
                               key="prod_active")
         drive_folder = st.text_input(
             "Drive folder ID (opcional)",
@@ -395,7 +404,6 @@ def _render_products():
 
         asins_text = st.text_input(
             "ASINs de Amazon (separados por coma)",
-            value=", ".join((current or {}).get("asins") or []),
             key="prod_asins",
             help=("ASINs del producto en cada marketplace (ES, FR, IT, DE…). "
                   "Se usan para que el auto-draft de Fase 3 sepa qué producto "
