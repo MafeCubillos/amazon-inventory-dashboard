@@ -1,0 +1,31 @@
+name: PO Auto-draft Scan
+
+on:
+  schedule:
+    # Mondays + Thursdays at 08:00 UTC (= 09:00 Spain winter, 10:00 summer).
+    # Off-the-hour minute to avoid GitHub cron high-load delays.
+    - cron: '7 8 * * 1,4'
+  workflow_dispatch:        # Manual trigger from the Actions tab
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run PO auto-draft scan
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY:         ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python scripts/po_auto_scan.py
