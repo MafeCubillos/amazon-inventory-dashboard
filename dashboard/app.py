@@ -412,10 +412,13 @@ def load_master(warn_buffer: int = 15) -> list[dict]:
     if DEMO_MODE:
         return _demo_master(warn_buffer)
 
-    # Load products
+    # Load products — only ACTIVE (planned products don't have real inventory
+    # and shouldn't show up in Inventory / Reorder / Distribution).
+    # Using a safe filter: include anything that isn't explicitly 'planned'.
     products_raw = db.table("products").select(
-        "asin,product_name,sku,cogs_eur,lead_time_days,target_days_coverage"
+        "asin,product_name,sku,cogs_eur,lead_time_days,target_days_coverage,status"
     ).execute().data or []
+    products_raw = [p for p in products_raw if (p.get("status") or "active") != "planned"]
     if not products_raw:
         return []
 
@@ -4031,8 +4034,35 @@ def render_pnl_builder_page(rows: list[dict]):
     from backend.pnl_assumptions import (
         SCENARIOS, LINE_ITEMS, load_all, resolve, save_value,
         get_active_scenario, set_config, get_horizon_last_ym,
-        future_months, seed_global_defaults, _WILDCARD,
+        future_months, seed_global_defaults, seed_planned_products_2027,
+        LAUNCH_SCHEDULE_2027, VINE_TOTAL_PER_PRODUCT, _WILDCARD,
     )
+
+    # Load ALL products (active + planned) for the P&L Builder, since P&L
+    # covers both. Inventory/Reorder pages keep filtering to active only.
+    try:
+        from backend.database import db_admin
+        all_products = (
+            db_admin.table("products")
+            .select("asin,product_name,status,launch_year_month")
+            .in_("status", ["active", "planned"])
+            .execute().data or []
+        )
+        # Keep active rows coming from the existing `rows` (they have names+countries)
+        active_by_asin = {r["asin"]: r for r in rows}
+        rows = []
+        for p in all_products:
+            if p["asin"] in active_by_asin:
+                rows.append(active_by_asin[p["asin"]])
+            else:
+                rows.append({
+                    "asin":   p["asin"],
+                    "name":   p.get("product_name") or p["asin"],
+                    "status": p.get("status", "planned"),
+                    "launch_year_month": p.get("launch_year_month"),
+                })
+    except Exception:
+        pass   # fall back to original rows
 
     st.markdown("#### 💶 P&L Builder")
     st.caption(
@@ -4061,11 +4091,27 @@ def render_pnl_builder_page(rows: list[dict]):
         st.text_input("📅 Horizon final", value=horizon, disabled=True,
                       help="Cambia en Supabase tabla pnl_config si quieres extender.")
     with cC:
-        if st.button("🌱 Seed global defaults (TACOS 20%, VAT 10%, referral 15%)",
-                     key="pnl_seed_defaults"):
-            n = seed_global_defaults()
-            st.success(f"{n} defaults insertados (scenario='base')")
-            st.rerun()
+        cS1, cS2 = st.columns(2)
+        with cS1:
+            if st.button("🌱 Seed global defaults",
+                         key="pnl_seed_defaults",
+                         help="TACOS 20%, VAT 10%, referral 15%"):
+                n = seed_global_defaults()
+                st.success(f"{n} defaults insertados (scenario='base')")
+                st.rerun()
+        with cS2:
+            if st.button("🚀 Seed 12 planned 2027",
+                         key="pnl_seed_planned",
+                         help="Crea 12 productos planned (2 cada 2 meses "
+                              "empezando Ene 2027) + quantities ramp-up por "
+                              "scenario + Vine (€2,800) en línea Promo de cada "
+                              "mes de lanzamiento. Idempotente."):
+                n, warns = seed_planned_products_2027()
+                if n > 0:
+                    st.success(f"✅ {n} planned products creados/actualizados")
+                for w in warns[:10]:
+                    st.warning(w)
+                st.rerun()
 
     st.divider()
 

@@ -31,6 +31,7 @@ SCENARIOS = ["bear", "base", "bull"]
 LINE_ITEMS = {
     "revenue": [
         ("price",             "€ Consumer Price (INCL. IVA)",    True,  "Precio al cliente CON IVA (es lo que ves en Amazon). El IVA se descuenta más abajo automáticamente. Para productos con descuento constante, pon aquí el precio efectivo promedio."),
+        ("quantity",          "📊 Expected units sold",          True,  "Unidades esperadas por mes. Para productos existentes se usa el forecast automático. Para planned products se pone manual aquí (seed carga ramp-up típico de lanzamiento)."),
         ("promo_eur",         "€ Promo / Vine / descuento",      False, "Línea mensual global (igual que tu P&L sheet). Monto total esperado de promos + Vine en cada mes. Para un lanzamiento con Vine, suma el Vine del nuevo producto al mes correspondiente."),
         ("vat_rate",          "% VAT",                            False, "IVA promedio (ej. 10% = 0.10) — se usa para sacar el IVA del Consumer Price"),
     ],
@@ -184,6 +185,123 @@ def future_months(start_ym: str | None = None) -> list[str]:
 
 
 # ── Seed helpers ──────────────────────────────────────────────────────────
+
+# ── Planned products ──────────────────────────────────────────────────────
+
+# Ramp-up curve (base scenario) based on real Monvita launches
+_LAUNCH_RAMP_BASE = {1: 120, 2: 200, 3: 250, 4: 190, 5: 150}
+_STABLE_MONTH_6_PLUS = 180
+
+# Vine cost per launch (€170/country × 4 + 30u × 4 countries × €6 unit cost)
+_VINE_FEE_EUR            = 680   # €170 × 4 markets
+_VINE_FREE_UNITS_COST_EUR = 720  # 30 × 4 × €6 avg unit cost
+VINE_TOTAL_PER_PRODUCT   = _VINE_FEE_EUR + _VINE_FREE_UNITS_COST_EUR  # €1400
+
+# 2027 launch schedule: 2 products every 2 months
+LAUNCH_SCHEDULE_2027 = [
+    ("2027-01", ["PLANNED-001", "PLANNED-002"]),
+    ("2027-03", ["PLANNED-003", "PLANNED-004"]),
+    ("2027-05", ["PLANNED-005", "PLANNED-006"]),
+    ("2027-07", ["PLANNED-007", "PLANNED-008"]),
+    ("2027-09", ["PLANNED-009", "PLANNED-010"]),
+    ("2027-11", ["PLANNED-011", "PLANNED-012"]),
+]
+
+
+def _ym_add(ym: str, months_to_add: int) -> str:
+    y, m = (int(x) for x in ym.split("-"))
+    total = y * 12 + (m - 1) + months_to_add
+    return f"{total // 12:04d}-{(total % 12) + 1:02d}"
+
+
+def _ramp_units(month_of_life: int, scenario: str) -> int:
+    base = _LAUNCH_RAMP_BASE.get(month_of_life, _STABLE_MONTH_6_PLUS)
+    mult = {"bear": 0.80, "base": 1.0, "bull": 1.20}.get(scenario, 1.0)
+    return int(round(base * mult))
+
+
+def seed_planned_products_2027(
+    default_price: float = 29.90,
+    default_unit_cost: float = 6.0,
+    default_unit_label_cost: float = 0.5,
+) -> tuple[int, list[str]]:
+    """Create 12 planned products in the products table + seed their
+    expected quantity per month per scenario (bear/base/bull) + their
+    Vine budget in the global promo_eur line of the launch month.
+
+    Idempotent — upserts by ASIN. Returns (n_products, warnings)."""
+    warnings: list[str] = []
+    products_written = 0
+    horizon_end = get_horizon_last_ym()
+
+    for launch_ym, asins in LAUNCH_SCHEDULE_2027:
+        for i, asin in enumerate(asins):
+            # 1. Upsert product
+            try:
+                db_admin.table("products").upsert({
+                    "asin": asin,
+                    "product_name": f"Planned product {asin.split('-')[1]} (lanzamiento {launch_ym})",
+                    "status": "planned",
+                    "launch_year_month": launch_ym,
+                    "cogs_eur": round(default_unit_cost + default_unit_label_cost, 2),
+                    "lead_time_days": 70,
+                    "target_days_coverage": 60,
+                }, on_conflict="asin").execute()
+                products_written += 1
+            except Exception as exc:
+                warnings.append(f"{asin}: upsert failed: {exc}")
+                continue
+
+            # 2. Seed pnl_assumptions: price + unit_cost + unit_label_cost (defaults)
+            for scenario in SCENARIOS:
+                save_value(scenario, "revenue", "price",
+                           asin, _WILDCARD, default_price,
+                           notes="planned product seed")
+                save_value(scenario, "cogs", "unit_cost",
+                           asin, _WILDCARD, default_unit_cost,
+                           notes="planned product seed")
+                save_value(scenario, "cogs", "unit_label_cost",
+                           asin, _WILDCARD, default_unit_label_cost,
+                           notes="planned product seed")
+
+                # 3. Quantity ramp-up: month 1 is launch_ym, then +1, +2, ...
+                m_of_life = 1
+                cur_ym = launch_ym
+                while cur_ym <= horizon_end:
+                    units = _ramp_units(m_of_life, scenario)
+                    save_value(scenario, "revenue", "quantity",
+                               asin, cur_ym, float(units),
+                               notes="planned product ramp-up")
+                    cur_ym = _ym_add(cur_ym, 1)
+                    m_of_life += 1
+
+    # 4. For each launch month, bump the global promo_eur to include Vine for
+    #    both products launched that month (2 products × €1400 = €2800 extra).
+    #    We PRESERVE any existing promo_eur value by SUMMING vs overriding.
+    #    Note: we add Vine to BASE scenario only; bear/bull adjust manually.
+    for launch_ym, asins in LAUNCH_SCHEDULE_2027:
+        vine_total = VINE_TOTAL_PER_PRODUCT * len(asins)   # €2800 for 2 products
+        for scenario in SCENARIOS:
+            # Load current override (if any) for this scenario+month
+            existing = (
+                db_admin.table("pnl_assumptions")
+                .select("value")
+                .eq("scenario", scenario)
+                .eq("category", "revenue")
+                .eq("item_name", "promo_eur")
+                .eq("asin", _WILDCARD)
+                .eq("year_month", launch_ym)
+                .execute().data or []
+            )
+            cur_val = float(existing[0]["value"]) if existing else 0.0
+            # Bump Vine ONTO existing value (so you can set a base 'other promo'
+            # amount separately and we don't nuke it)
+            save_value(scenario, "revenue", "promo_eur",
+                       _WILDCARD, launch_ym, cur_val + vine_total,
+                       notes=f"auto-seed: +€{vine_total:.0f} Vine for {len(asins)} planned products")
+
+    return products_written, warnings
+
 
 def seed_global_defaults() -> int:
     """Seed sensible defaults into pnl_assumptions for base scenario globals
