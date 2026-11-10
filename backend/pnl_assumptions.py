@@ -39,10 +39,8 @@ LINE_ITEMS = {
     # UI shows a dedicated editable table in the COGS tab — no items here.
     "cogs": [],
     "amz_fees": [
-        ("tacos_pct",         "% TACOS (ads / sales)",           True,  "Spend PPC / Sales esperado"),
-        ("fba_fee_per_unit",  "€ FBA fulfillment / unidad",      True,  "Fee FBA por unidad vendida"),
-        ("referral_pct",      "% Referral (Amazon commission)",   True,  "Comisión Amazon sobre sales (ej 15%)"),
-        ("storage_fee_pct",   "% FBA storage of Sales",           False, "Storage fees aprox como % de Sales"),
+        ("tacos_pct",         "% TACOS (ads / sales)",           False, "Spend de PPC esperado como % de Sales. Línea global (igual que el P&L sheet). Default 20%."),
+        ("amazon_fees_pct",   "% Amazon fees (ex-ads)",          False, "Commission + FBA + Shipping + Refund costs como % de Sales. Default ~35% (basado en histórico Monvita). Línea global."),
     ],
     "sga": [
         ("labor",             "€ Labor (sueldos)",               False, "Sueldos y cargas mensuales"),
@@ -300,16 +298,16 @@ def seed_planned_products_2027(
 def seed_global_defaults() -> int:
     """Seed sensible defaults into pnl_assumptions for base scenario globals
     (TACOS 20%, VAT 10%, etc.). Idempotent via upsert. Returns rows written."""
+    # Defaults derived from Monvita historical (Oct 2026):
+    #   TACOS avg = Advertising / Sales = 11,280 / 69,873 ≈ 16% (bumped to 20%
+    #     as a planning conservative buffer; user can override)
+    #   Amazon fees (ex ads) = (Amazon_fees + Shipping) / Sales
+    #                        = 24,844 / 69,873 ≈ 35.5%
+    #   VAT = 10% average across markets
     defaults = [
-        # Revenue
-        ("revenue",   "vat_rate",      0.10),   # 10% VAT average
-        # Amazon fees
-        ("amz_fees",  "tacos_pct",     0.20),   # 20% TACOS
-        ("amz_fees",  "referral_pct",  0.15),   # 15% referral (Amazon commission)
-        ("amz_fees",  "storage_fee_pct", 0.005),
-        ("amz_fees",  "fba_fee_per_unit", 3.50),
-        # COGS defaults (zero — user must fill per product)
-        # SG&A and MKT default to 0 — user fills them per month
+        ("revenue",   "vat_rate",         0.10),
+        ("amz_fees",  "tacos_pct",        0.20),
+        ("amz_fees",  "amazon_fees_pct",  0.355),
     ]
     written = 0
     for cat, item, val in defaults:
