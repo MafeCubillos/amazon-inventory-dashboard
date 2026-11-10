@@ -30,9 +30,9 @@ SCENARIOS = ["bear", "base", "bull"]
 
 LINE_ITEMS = {
     "revenue": [
-        ("price",             "€ Price (per unit)",              True,  "Precio unitario al cliente (sin IVA)"),
-        ("promo_eur",         "€ Promo / Vine / descuento",      True,  "Monto esperado de promos / Vine por mes"),
-        ("vat_rate",          "% VAT",                            False, "IVA promedio (ej. 10% = 0.10)"),
+        ("price",             "€ Consumer Price (INCL. IVA)",    True,  "Precio al cliente CON IVA (es lo que ves en Amazon). El IVA se descuenta más abajo automáticamente."),
+        ("promo_eur",         "€ Promo / Vine / descuento",      True,  "Monto esperado mensual de promos y Vine (se resta de GMV)"),
+        ("vat_rate",          "% VAT",                            False, "IVA promedio (ej. 10% = 0.10) — se usa para sacar el IVA del Consumer Price"),
     ],
     "cogs": [
         ("unit_cost",         "€ Unit cost (supplier)",          True,  "Costo supplier por unidad"),
