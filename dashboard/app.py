@@ -924,6 +924,7 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
                      ("💰", "Finance-TikTok",  "finance"),
                      ("📈", "Forecast",        "forecast"),
                      ("📊", "Forecast Builder","forecast_builder"),
+                     ("💶", "P&L Builder",     "pnl_builder"),
                      ("⚙️", "Settings",        "settings")]
 
         for icon, label, key in nav_items:
@@ -4022,6 +4023,151 @@ def render_forecast_builder_page(rows: list[dict]):
 
 
 # ══════════════════════════════════════════════════════════════
+# P&L BUILDER — Assumptions with 3 scenarios (bear / base / bull)
+# ══════════════════════════════════════════════════════════════
+
+def render_pnl_builder_page(rows: list[dict]):
+    import pandas as _pd
+    from backend.pnl_assumptions import (
+        SCENARIOS, LINE_ITEMS, load_all, resolve, save_value,
+        get_active_scenario, set_config, get_horizon_last_ym,
+        future_months, seed_global_defaults, _WILDCARD,
+    )
+
+    st.markdown("#### 💶 P&L Builder")
+    st.caption(
+        "Inputs editables por scenario (Bear / Base / Bull) para construir el P&L proyectado. "
+        "Precios y costos son **constantes por producto** con override mensual opcional. "
+        "Fixed costs (SG&A / MKT) son por mes. "
+        "**Quantities** se jalan automáticamente del Forecast Builder (puedes hacer override manual aquí también)."
+    )
+
+    # ── Top bar: scenario + horizon ────────────────────────────
+    cA, cB, cC = st.columns([1, 1, 2])
+    active = get_active_scenario()
+    with cA:
+        new_active = st.selectbox(
+            "🎯 Scenario activo (global)",
+            options=SCENARIOS,
+            index=SCENARIOS.index(active),
+            key="pnl_scenario_active",
+            help="Este es el scenario que el P&L view va a usar para proyectar.",
+        )
+        if new_active != active:
+            set_config("active_scenario", new_active)
+            st.rerun()
+    with cB:
+        horizon = get_horizon_last_ym()
+        st.text_input("📅 Horizon final", value=horizon, disabled=True,
+                      help="Cambia en Supabase tabla pnl_config si quieres extender.")
+    with cC:
+        if st.button("🌱 Seed global defaults (TACOS 20%, VAT 10%, referral 15%)",
+                     key="pnl_seed_defaults"):
+            n = seed_global_defaults()
+            st.success(f"{n} defaults insertados (scenario='base')")
+            st.rerun()
+
+    st.divider()
+
+    # ── Scenario editor ────────────────────────────────────────
+    edit_scenario = st.radio(
+        "Editando scenario:",
+        options=SCENARIOS, index=SCENARIOS.index(active),
+        key="pnl_edit_scenario", horizontal=True,
+    )
+    st.caption(f"Vas a editar valores para **{edit_scenario.upper()}**. "
+               f"El scenario activo para el P&L es **{get_active_scenario().upper()}**.")
+
+    all_data = load_all(edit_scenario)
+
+    # Build ASIN list (with names)
+    asin_opts = [(r["asin"], r.get("name", r["asin"])) for r in rows]
+    asin_names = {a: n for a, n in asin_opts}
+    all_asins  = [a for a, _ in asin_opts]
+
+    cat_tabs = st.tabs(["💰 Revenue", "🏭 COGS", "📦 Amazon Fees", "👔 SG&A", "📣 MKT"])
+    cat_keys = ["revenue", "cogs", "amz_fees", "sga", "mkt"]
+
+    for tab, cat in zip(cat_tabs, cat_keys):
+        with tab:
+            items = LINE_ITEMS.get(cat, [])
+            for item_key, item_label, is_per_product, tooltip in items:
+                with st.container(border=True):
+                    st.markdown(f"**{item_label}**")
+                    st.caption(tooltip)
+
+                    if not is_per_product:
+                        # Single global value (no per-product breakdown)
+                        current = resolve(all_data, cat, item_key, _WILDCARD, _WILDCARD, 0.0)
+                        c1, c2 = st.columns([2, 5])
+                        with c1:
+                            new_v = st.number_input(
+                                "Valor (global, todos los meses)",
+                                value=float(current), step=10.0,
+                                key=f"pnl_{edit_scenario}_{cat}_{item_key}_global",
+                                label_visibility="collapsed",
+                                format="%.4f" if cat == "revenue" and item_key == "vat_rate" else "%.2f",
+                            )
+                        with c2:
+                            if st.button("💾 Guardar", key=f"pnl_save_{edit_scenario}_{cat}_{item_key}"):
+                                save_value(edit_scenario, cat, item_key,
+                                           _WILDCARD, _WILDCARD, new_v)
+                                st.success("Guardado")
+                                st.rerun()
+                    else:
+                        # Per-product values table
+                        prod_rows = []
+                        for a in all_asins:
+                            v = resolve(all_data, cat, item_key, a, _WILDCARD, 0.0)
+                            prod_rows.append({
+                                "ASIN": a,
+                                "Producto": (asin_names.get(a, a) or a)[:50],
+                                "Valor default (todos los meses)": float(v),
+                            })
+                        df = _pd.DataFrame(prod_rows)
+                        edited = st.data_editor(
+                            df,
+                            column_config={
+                                "ASIN":     st.column_config.TextColumn("ASIN", disabled=True, width="small"),
+                                "Producto": st.column_config.TextColumn("Producto", disabled=True, width="large"),
+                                "Valor default (todos los meses)":
+                                    st.column_config.NumberColumn(
+                                        "Valor default",
+                                        format="%.2f",
+                                        help="Valor base que se usa en todos los meses si no hay override mensual.",
+                                    ),
+                            },
+                            hide_index=True, use_container_width=True,
+                            key=f"pnl_editor_{edit_scenario}_{cat}_{item_key}",
+                            num_rows="fixed",
+                        )
+                        if st.button(f"💾 Guardar {item_key}",
+                                     key=f"pnl_save_prod_{edit_scenario}_{cat}_{item_key}",
+                                     type="primary"):
+                            saved = 0
+                            for _, r in edited.iterrows():
+                                asin = r["ASIN"]
+                                val  = float(r["Valor default (todos los meses)"])
+                                old  = resolve(all_data, cat, item_key, asin, _WILDCARD, 0.0)
+                                if abs(val - old) > 1e-6:
+                                    save_value(edit_scenario, cat, item_key,
+                                               asin, _WILDCARD, val)
+                                    saved += 1
+                            if saved:
+                                st.success(f"✅ Actualizados {saved} productos")
+                                st.rerun()
+                            else:
+                                st.info("Nada que guardar — no hay cambios")
+
+    st.divider()
+    st.caption(
+        "💡 **Monthly overrides**: si para un mes específico un valor cambia (ej. promo de Black Friday), "
+        "lo puedes editar en Supabase insertando una fila con `year_month='2026-11'` (en vez de `'*'`). "
+        "La UI para overrides mensuales la añadimos en Fase C junto con el P&L viewer."
+    )
+
+
+# ══════════════════════════════════════════════════════════════
 # SETTINGS TAB
 # ══════════════════════════════════════════════════════════════
 
@@ -4744,6 +4890,10 @@ elif page == "forecast":
 # ════════ PAGE: FORECAST BUILDER (auto projections) ════════
 elif page == "forecast_builder":
     render_forecast_builder_page(rows)
+
+# ════════ PAGE: P&L BUILDER (Assumptions with scenarios) ════════
+elif page == "pnl_builder":
+    render_pnl_builder_page(rows)
 
 # ════════ PAGE: SETTINGS ════════
 elif page == "settings":
