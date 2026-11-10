@@ -123,12 +123,11 @@ def parse_month_csv(text: str) -> list[dict]:
         if not ym:
             continue
 
-        sales = (_to_float(row.get("SalesOrganic")) + _to_float(row.get("SalesPPC"))
-                 + _to_float(row.get("SalesSponsoredProducts"))
-                 + _to_float(row.get("SalesSponsoredDisplay")))
-        units = (_to_int(row.get("UnitsOrganic")) + _to_int(row.get("UnitsPPC"))
-                 + _to_int(row.get("UnitsSponsoredProducts"))
-                 + _to_int(row.get("UnitsSponsoredDisplay")))
+        # Sellerboard's SalesPPC is the TOTAL PPC bucket; SalesSponsoredProducts
+        # and SalesSponsoredDisplay are breakdowns of that same bucket. Summing
+        # all three double-counts. Correct formula: Organic + PPC.
+        sales = _to_float(row.get("SalesOrganic")) + _to_float(row.get("SalesPPC"))
+        units = _to_int(row.get("UnitsOrganic")) + _to_int(row.get("UnitsPPC"))
         ads   = sum(_to_float(row.get(c)) for c in _ADS_COLS)
         # Amazon fees + refund-related entries all get aggregated
         amz_fees = sum(_to_float(row.get(c)) for c in _AMZ_FEE_COLS)
@@ -189,12 +188,10 @@ def parse_product_csv(text: str) -> list[dict]:
             "product_cost": 0.0, "vat": 0.0,
             "gross_profit": 0.0, "net_profit": 0.0,
         })
-        d["units"]         += (_to_int(row.get("UnitsOrganic")) + _to_int(row.get("UnitsPPC"))
-                               + _to_int(row.get("UnitsSponsoredProducts"))
-                               + _to_int(row.get("UnitsSponsoredDisplay")))
-        d["sales_eur"]     += (_to_float(row.get("SalesOrganic")) + _to_float(row.get("SalesPPC"))
-                               + _to_float(row.get("SalesSponsoredProducts"))
-                               + _to_float(row.get("SalesSponsoredDisplay")))
+        # Organic + PPC (don't also add SponsoredProducts/Display — they're
+        # breakdowns of PPC, see note in parse_month_csv).
+        d["units"]         += _to_int(row.get("UnitsOrganic")) + _to_int(row.get("UnitsPPC"))
+        d["sales_eur"]     += _to_float(row.get("SalesOrganic")) + _to_float(row.get("SalesPPC"))
         d["promo_eur"]     += _to_float(row.get("PromoValue"))
         d["refunds_units"] += _to_int(row.get("Refunds"))
         d["ads_spend"]     += sum(_to_float(row.get(c)) for c in _ADS_COLS)
