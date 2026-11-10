@@ -39,8 +39,13 @@ LINE_ITEMS = {
     # UI shows a dedicated editable table in the COGS tab — no items here.
     "cogs": [],
     "amz_fees": [
-        ("tacos_pct",         "% TACOS (ads / sales)",           False, "Spend de PPC esperado como % de Sales. Línea global (igual que el P&L sheet). Default 20%."),
-        ("amazon_fees_pct",   "% Amazon fees (ex-ads)",          False, "Commission + FBA + Shipping + Refund costs como % de Sales. Default ~35% (basado en histórico Monvita). Línea global."),
+        ("tacos_pct",                "% TACOS (ads / sales)",              False, "Spend PPC esperado como % de Sales. Default 20%."),
+        ("fulfillment_fee_per_unit", "€ Fulfillment Fee / unidad vendida", False, "FBA fulfillment cost por unidad. Default €3.73."),
+        ("referral_pct",             "% Referral Fee (sobre Sales)",       False, "Commission Amazon sobre ventas. Default 15%."),
+        ("digital_services_pct",     "% Digital Services (sobre Referral)", False, "3% del Referral Fee. Default 3%."),
+        ("inbound_transp_per_unit",  "€ Inbound Transp. / unidad inbound", False, "Costo transporte por unidad que ingresa a FBA. Default €0.10."),
+        ("storage_fee_per_unit",     "€ FBA Storage / unidad almacenada",  False, "Fee por unidad almacenada por mes. Default €0.03."),
+        ("subscription_monthly",     "€ Subscription (fijo mensual)",      False, "Cuota pro Amazon. Default €39/mes."),
     ],
     "sga": [
         ("labor",             "€ Labor (sueldos)",               False, "Sueldos y cargas mensuales"),
@@ -298,16 +303,18 @@ def seed_planned_products_2027(
 def seed_global_defaults() -> int:
     """Seed sensible defaults into pnl_assumptions for base scenario globals
     (TACOS 20%, VAT 10%, etc.). Idempotent via upsert. Returns rows written."""
-    # Defaults derived from Monvita historical (Oct 2026):
-    #   TACOS avg = Advertising / Sales = 11,280 / 69,873 ≈ 16% (bumped to 20%
-    #     as a planning conservative buffer; user can override)
-    #   Amazon fees (ex ads) = (Amazon_fees + Shipping) / Sales
-    #                        = 24,844 / 69,873 ≈ 35.5%
-    #   VAT = 10% average across markets
+    # Defaults based on Monvita's real Amazon fee structure:
     defaults = [
-        ("revenue",   "vat_rate",         0.10),
-        ("amz_fees",  "tacos_pct",        0.20),
-        ("amz_fees",  "amazon_fees_pct",  0.355),
+        # Revenue
+        ("revenue",   "vat_rate",                 0.10),    # 10% IVA average
+        # Amazon fees — detalle real
+        ("amz_fees",  "tacos_pct",                0.20),    # 20% ads / sales
+        ("amz_fees",  "fulfillment_fee_per_unit", 3.73),    # €3.73/unit sold
+        ("amz_fees",  "referral_pct",             0.15),    # 15% referral
+        ("amz_fees",  "digital_services_pct",     0.03),    # 3% del referral
+        ("amz_fees",  "inbound_transp_per_unit",  0.10),    # €0.10/unit inbound
+        ("amz_fees",  "storage_fee_per_unit",     0.03),    # €0.03/unit stored
+        ("amz_fees",  "subscription_monthly",    39.00),    # €39/mes
     ]
     written = 0
     for cat, item, val in defaults:
