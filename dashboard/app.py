@@ -4450,6 +4450,30 @@ Refresh token expires in: {data.get('refresh_token_expire_in', '?')} seconds""",
                 height=750, scrolling=True,
             )
 
+    # ── Sellerboard sync ────────────────────────────────────
+    with st.container(border=True):
+        st.markdown("#### 💰 Sellerboard P&L sync")
+        st.caption(
+            "Descarga los reports CSV de Sellerboard (Dashboard by month + "
+            "Dashboard by product) y los inserta en `sb_actuals_monthly` y "
+            "`sb_actuals_total_monthly`. Base del P&L. Se re-sincroniza automáticamente "
+            "el día 2 de cada mes (cuando Sellerboard cierra el mes anterior)."
+        )
+        if st.button("🔄 Sync Sellerboard now", key="sb_sync_btn"):
+            with st.spinner("Descargando CSVs y escribiendo a Supabase…"):
+                try:
+                    from backend.fetchers.sellerboard import sync_sellerboard
+                    n_product, n_month, warns = sync_sellerboard()
+                    if n_product > 0 or n_month > 0:
+                        st.success(f"✅ {n_product} filas producto × mes · "
+                                   f"{n_month} filas totales mensuales")
+                    else:
+                        st.warning("No se insertó nada — revisa warnings")
+                    for w in warns:
+                        st.info(w)
+                except Exception as exc:
+                    st.error(f"Sync falló: {exc}")
+
     st.divider()
     if st.button("↩️ Reset all to defaults", key="reset_settings_btn"):
         st.session_state.warn_buffer      = 15
