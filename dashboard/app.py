@@ -4097,23 +4097,102 @@ def render_pnl_builder_page(rows: list[dict]):
                     st.caption(tooltip)
 
                     if not is_per_product:
-                        # Single global value (no per-product breakdown)
-                        current = resolve(all_data, cat, item_key, _WILDCARD, _WILDCARD, 0.0)
-                        c1, c2 = st.columns([2, 5])
-                        with c1:
-                            new_v = st.number_input(
-                                "Valor (global, todos los meses)",
-                                value=float(current), step=10.0,
-                                key=f"pnl_{edit_scenario}_{cat}_{item_key}_global",
-                                label_visibility="collapsed",
-                                format="%.4f" if cat == "revenue" and item_key == "vat_rate" else "%.2f",
+                        # Global value — single default + optional monthly overrides
+                        view_mode = st.radio(
+                            "Vista:",
+                            options=["🔁 Default (todos los meses)", "📅 Monthly overrides"],
+                            key=f"pnl_g_mode_{edit_scenario}_{cat}_{item_key}",
+                            horizontal=True,
+                            label_visibility="collapsed",
+                        )
+                        current_default = resolve(all_data, cat, item_key,
+                                                   _WILDCARD, _WILDCARD, 0.0)
+
+                        if view_mode.startswith("🔁"):
+                            # Single global value
+                            c1, c2 = st.columns([2, 5])
+                            with c1:
+                                new_v = st.number_input(
+                                    "Valor (global, todos los meses)",
+                                    value=float(current_default), step=10.0,
+                                    key=f"pnl_{edit_scenario}_{cat}_{item_key}_global",
+                                    label_visibility="collapsed",
+                                    format="%.4f" if cat == "revenue" and item_key == "vat_rate" else "%.2f",
+                                )
+                            with c2:
+                                if st.button("💾 Guardar", key=f"pnl_save_{edit_scenario}_{cat}_{item_key}"):
+                                    save_value(edit_scenario, cat, item_key,
+                                               _WILDCARD, _WILDCARD, new_v)
+                                    st.success("Guardado")
+                                    st.rerun()
+                        else:
+                            # Monthly overrides for a GLOBAL line (promo, SG&A, MKT…)
+                            from datetime import date as _date
+                            today = _date.today()
+                            cur_y, cur_m = today.year, today.month
+
+                            # 3 past + current + future
+                            all_months: list[str] = []
+                            y, m = cur_y, cur_m - 3
+                            while m < 1:
+                                m += 12
+                                y -= 1
+                            n_months = 3 + 1 + len(future_months())
+                            for _ in range(n_months):
+                                all_months.append(f"{y:04d}-{m:02d}")
+                                m += 1
+                                if m > 12:
+                                    m = 1
+                                    y += 1
+
+                            bucket = all_data.get((cat, item_key), {})
+                            # Build one-row dataframe (this is a global line)
+                            row_dict = {"Línea": item_label}
+                            for ym in all_months:
+                                v = bucket.get((_WILDCARD, ym))
+                                row_dict[ym] = float(v) if v is not None else float(current_default)
+                            df = _pd.DataFrame([row_dict])
+
+                            st.caption(
+                                f"Edita valores mes a mes. El default actual es **€{current_default:,.2f}** · mes actual: **{cur_y}-{cur_m:02d}**. "
+                                "Para un lanzamiento con Vine, suma el Vine al mes del lanzamiento."
                             )
-                        with c2:
-                            if st.button("💾 Guardar", key=f"pnl_save_{edit_scenario}_{cat}_{item_key}"):
-                                save_value(edit_scenario, cat, item_key,
-                                           _WILDCARD, _WILDCARD, new_v)
-                                st.success("Guardado")
-                                st.rerun()
+                            col_cfg = {"Línea": st.column_config.TextColumn("Línea", disabled=True, width="medium")}
+                            for ym in all_months:
+                                col_cfg[ym] = st.column_config.NumberColumn(
+                                    ym, format="%.2f", width="small",
+                                )
+
+                            edited = st.data_editor(
+                                df, column_config=col_cfg,
+                                hide_index=True, use_container_width=True,
+                                key=f"pnl_g_editor_monthly_{edit_scenario}_{cat}_{item_key}",
+                                num_rows="fixed",
+                            )
+
+                            if st.button("💾 Guardar overrides mensuales",
+                                         key=f"pnl_g_save_monthly_{edit_scenario}_{cat}_{item_key}",
+                                         type="primary"):
+                                saved = 0
+                                r = edited.iloc[0]
+                                for ym in all_months:
+                                    new_v = float(r[ym])
+                                    cur_override = bucket.get((_WILDCARD, ym))
+                                    if cur_override is None:
+                                        if abs(new_v - current_default) > 1e-6:
+                                            save_value(edit_scenario, cat, item_key,
+                                                       _WILDCARD, ym, new_v)
+                                            saved += 1
+                                    else:
+                                        if abs(new_v - cur_override) > 1e-6:
+                                            save_value(edit_scenario, cat, item_key,
+                                                       _WILDCARD, ym, new_v)
+                                            saved += 1
+                                if saved:
+                                    st.success(f"✅ Guardados {saved} meses")
+                                    st.rerun()
+                                else:
+                                    st.info("Nada que guardar")
                     else:
                         # Per-product values: 2 modes — "Default" or "Monthly overrides"
                         view_mode = st.radio(
