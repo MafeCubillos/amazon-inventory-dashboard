@@ -35,10 +35,9 @@ LINE_ITEMS = {
         ("promo_eur",         "€ Promo / Vine / descuento",      False, "Línea mensual global (igual que tu P&L sheet). Monto total esperado de promos + Vine en cada mes. Para un lanzamiento con Vine, suma el Vine del nuevo producto al mes correspondiente."),
         ("vat_rate",          "% VAT",                            False, "IVA promedio (ej. 10% = 0.10) — se usa para sacar el IVA del Consumer Price"),
     ],
-    "cogs": [
-        ("unit_cost",         "€ Unit cost (supplier)",          True,  "Costo supplier por unidad"),
-        ("unit_label_cost",   "€ Unit label cost",               True,  "Costo etiqueta por unidad"),
-    ],
+    # COGS is read directly from products.cogs_eur (ONE source of truth).
+    # UI shows a dedicated editable table in the COGS tab — no items here.
+    "cogs": [],
     "amz_fees": [
         ("tacos_pct",         "% TACOS (ads / sales)",           True,  "Spend PPC / Sales esperado"),
         ("fba_fee_per_unit",  "€ FBA fulfillment / unidad",      True,  "Fee FBA por unidad vendida"),
@@ -252,16 +251,11 @@ def seed_planned_products_2027(
                 warnings.append(f"{asin}: upsert failed: {exc}")
                 continue
 
-            # 2. Seed pnl_assumptions: price + unit_cost + unit_label_cost (defaults)
+            # 2. Seed pnl_assumptions: price per scenario (unit cost goes to
+            #    products.cogs_eur via the upsert above — ONE source of truth)
             for scenario in SCENARIOS:
                 save_value(scenario, "revenue", "price",
                            asin, _WILDCARD, default_price,
-                           notes="planned product seed")
-                save_value(scenario, "cogs", "unit_cost",
-                           asin, _WILDCARD, default_unit_cost,
-                           notes="planned product seed")
-                save_value(scenario, "cogs", "unit_label_cost",
-                           asin, _WILDCARD, default_unit_label_cost,
                            notes="planned product seed")
 
                 # 3. Quantity ramp-up: month 1 is launch_ym, then +1, +2, ...

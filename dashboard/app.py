@@ -4137,6 +4137,69 @@ def render_pnl_builder_page(rows: list[dict]):
     for tab, cat in zip(cat_tabs, cat_keys):
         with tab:
             items = LINE_ITEMS.get(cat, [])
+
+            # Special-case COGS: one editable table of products.cogs_eur
+            # (single source of truth, shared with Inventory/Reorder)
+            if cat == "cogs":
+                st.caption(
+                    "Costo unitario total por producto (unit cost + label). "
+                    "Es la **única fuente** — el P&L, Inventory y Reorder leen de aquí. "
+                    "Scenarios NO aplican a COGS (cost real no cambia por bear/base/bull)."
+                )
+                try:
+                    cogs_products = (
+                        db_admin.table("products")
+                        .select("asin,product_name,cogs_eur,status")
+                        .in_("status", ["active", "planned"])
+                        .execute().data or []
+                    )
+                except Exception as exc:
+                    st.error(f"No pude leer productos: {exc}")
+                    cogs_products = []
+                cogs_rows = []
+                for p in sorted(cogs_products, key=lambda x: (x.get("status") or "", x["asin"])):
+                    cogs_rows.append({
+                        "ASIN":      p["asin"],
+                        "Producto":  (p.get("product_name") or p["asin"])[:50],
+                        "Status":    p.get("status") or "active",
+                        "€ COGS/u":  float(p.get("cogs_eur") or 0),
+                    })
+                df_cogs = _pd.DataFrame(cogs_rows)
+                edited_cogs = st.data_editor(
+                    df_cogs,
+                    column_config={
+                        "ASIN":     st.column_config.TextColumn("ASIN", disabled=True, width="small"),
+                        "Producto": st.column_config.TextColumn("Producto", disabled=True, width="large"),
+                        "Status":   st.column_config.TextColumn("Status", disabled=True, width="small"),
+                        "€ COGS/u": st.column_config.NumberColumn(
+                            "€ COGS/u", format="%.2f",
+                            help="Costo unitario total (supplier + etiqueta). Shared con Inventory/Reorder.",
+                        ),
+                    },
+                    hide_index=True, use_container_width=True,
+                    key="pnl_cogs_editor", num_rows="fixed",
+                )
+                if st.button("💾 Guardar COGS (products table)",
+                             key="pnl_save_cogs", type="primary"):
+                    saved = 0
+                    for _, r in edited_cogs.iterrows():
+                        asin = r["ASIN"]
+                        new_v = float(r["€ COGS/u"])
+                        old = next((float(p.get("cogs_eur") or 0)
+                                    for p in cogs_products if p["asin"] == asin), 0.0)
+                        if abs(new_v - old) > 1e-6:
+                            db_admin.table("products").update(
+                                {"cogs_eur": round(new_v, 4)}
+                            ).eq("asin", asin).execute()
+                            saved += 1
+                    if saved:
+                        st.success(f"✅ Actualizados {saved} productos")
+                        load_master.clear()
+                        st.rerun()
+                    else:
+                        st.info("Nada que guardar")
+                continue   # skip the generic item loop for COGS
+
             for item_key, item_label, is_per_product, tooltip in items:
                 with st.container(border=True):
                     st.markdown(f"**{item_label}**")
