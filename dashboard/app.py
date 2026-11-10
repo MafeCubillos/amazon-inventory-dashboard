@@ -4115,49 +4115,157 @@ def render_pnl_builder_page(rows: list[dict]):
                                 st.success("Guardado")
                                 st.rerun()
                     else:
-                        # Per-product values table
-                        prod_rows = []
-                        for a in all_asins:
-                            v = resolve(all_data, cat, item_key, a, _WILDCARD, 0.0)
-                            prod_rows.append({
-                                "ASIN": a,
-                                "Producto": (asin_names.get(a, a) or a)[:50],
-                                "Valor default (todos los meses)": float(v),
-                            })
-                        df = _pd.DataFrame(prod_rows)
-                        edited = st.data_editor(
-                            df,
-                            column_config={
-                                "ASIN":     st.column_config.TextColumn("ASIN", disabled=True, width="small"),
-                                "Producto": st.column_config.TextColumn("Producto", disabled=True, width="large"),
-                                "Valor default (todos los meses)":
-                                    st.column_config.NumberColumn(
-                                        "Valor default",
-                                        format="%.2f",
-                                        help="Valor base que se usa en todos los meses si no hay override mensual.",
-                                    ),
-                            },
-                            hide_index=True, use_container_width=True,
-                            key=f"pnl_editor_{edit_scenario}_{cat}_{item_key}",
-                            num_rows="fixed",
+                        # Per-product values: 2 modes — "Default" or "Monthly overrides"
+                        view_mode = st.radio(
+                            "Vista:",
+                            options=["🔁 Default (todos los meses)", "📅 Monthly overrides"],
+                            key=f"pnl_mode_{edit_scenario}_{cat}_{item_key}",
+                            horizontal=True,
+                            label_visibility="collapsed",
                         )
-                        if st.button(f"💾 Guardar {item_key}",
-                                     key=f"pnl_save_prod_{edit_scenario}_{cat}_{item_key}",
-                                     type="primary"):
-                            saved = 0
-                            for _, r in edited.iterrows():
-                                asin = r["ASIN"]
-                                val  = float(r["Valor default (todos los meses)"])
-                                old  = resolve(all_data, cat, item_key, asin, _WILDCARD, 0.0)
-                                if abs(val - old) > 1e-6:
-                                    save_value(edit_scenario, cat, item_key,
-                                               asin, _WILDCARD, val)
-                                    saved += 1
-                            if saved:
-                                st.success(f"✅ Actualizados {saved} productos")
-                                st.rerun()
-                            else:
-                                st.info("Nada que guardar — no hay cambios")
+
+                        if view_mode.startswith("🔁"):
+                            # Default-per-product table
+                            prod_rows = []
+                            for a in all_asins:
+                                v = resolve(all_data, cat, item_key, a, _WILDCARD, 0.0)
+                                prod_rows.append({
+                                    "ASIN": a,
+                                    "Producto": (asin_names.get(a, a) or a)[:50],
+                                    "Valor default (todos los meses)": float(v),
+                                })
+                            df = _pd.DataFrame(prod_rows)
+                            edited = st.data_editor(
+                                df,
+                                column_config={
+                                    "ASIN":     st.column_config.TextColumn("ASIN", disabled=True, width="small"),
+                                    "Producto": st.column_config.TextColumn("Producto", disabled=True, width="large"),
+                                    "Valor default (todos los meses)":
+                                        st.column_config.NumberColumn(
+                                            "Valor default",
+                                            format="%.2f",
+                                            help="Valor base que se usa en todos los meses si no hay override mensual.",
+                                        ),
+                                },
+                                hide_index=True, use_container_width=True,
+                                key=f"pnl_editor_{edit_scenario}_{cat}_{item_key}",
+                                num_rows="fixed",
+                            )
+                            if st.button(f"💾 Guardar {item_key}",
+                                         key=f"pnl_save_prod_{edit_scenario}_{cat}_{item_key}",
+                                         type="primary"):
+                                saved = 0
+                                for _, r in edited.iterrows():
+                                    asin = r["ASIN"]
+                                    val  = float(r["Valor default (todos los meses)"])
+                                    old  = resolve(all_data, cat, item_key, asin, _WILDCARD, 0.0)
+                                    if abs(val - old) > 1e-6:
+                                        save_value(edit_scenario, cat, item_key,
+                                                   asin, _WILDCARD, val)
+                                        saved += 1
+                                if saved:
+                                    st.success(f"✅ Actualizados {saved} productos")
+                                    st.rerun()
+                                else:
+                                    st.info("Nada que guardar — no hay cambios")
+                        else:
+                            # Monthly overrides grid: columns = months (past 3 + future horizon)
+                            # Cell = override if present, else shows the default (greyed)
+                            from datetime import date as _date
+                            today = _date.today()
+                            cur_y, cur_m = today.year, today.month
+
+                            # Build month list: 3 past + current + up to horizon
+                            all_months: list[str] = []
+                            y, m = cur_y, cur_m - 3
+                            while m < 1:
+                                m += 12
+                                y -= 1
+                            # 3 past months + current + future
+                            n_months = 3 + 1 + len(future_months())
+                            for _ in range(n_months):
+                                all_months.append(f"{y:04d}-{m:02d}")
+                                m += 1
+                                if m > 12:
+                                    m = 1
+                                    y += 1
+
+                            # Build grid
+                            bucket = all_data.get((cat, item_key), {})
+                            grid_rows = []
+                            for a in all_asins:
+                                row = {
+                                    "ASIN": a,
+                                    "Producto": (asin_names.get(a, a) or a)[:30],
+                                }
+                                default_val = bucket.get((a, _WILDCARD),
+                                               bucket.get((_WILDCARD, _WILDCARD), 0.0))
+                                for ym in all_months:
+                                    override = bucket.get((a, ym))
+                                    row[ym] = float(override) if override is not None else float(default_val)
+                                grid_rows.append(row)
+                            df = _pd.DataFrame(grid_rows)
+
+                            st.caption(
+                                "Edita celdas para crear overrides mensuales (ej. Vine en mes de lanzamiento). "
+                                f"El valor default del producto se muestra cuando no hay override — el mes actual es **{cur_y}-{cur_m:02d}**."
+                            )
+                            col_cfg = {
+                                "ASIN":     st.column_config.TextColumn("ASIN", disabled=True, width="small"),
+                                "Producto": st.column_config.TextColumn("Producto", disabled=True, width="medium"),
+                            }
+                            for ym in all_months:
+                                col_cfg[ym] = st.column_config.NumberColumn(
+                                    ym, format="%.2f", width="small",
+                                    help=f"Valor para {ym}. Cambiar crea un override.",
+                                )
+
+                            edited = st.data_editor(
+                                df,
+                                column_config=col_cfg,
+                                hide_index=True,
+                                use_container_width=True,
+                                key=f"pnl_editor_monthly_{edit_scenario}_{cat}_{item_key}",
+                                num_rows="fixed",
+                                height=min(60 + len(all_asins) * 35, 500),
+                            )
+
+                            cL, cR = st.columns([1, 3])
+                            with cL:
+                                if st.button(f"💾 Guardar overrides",
+                                             key=f"pnl_save_monthly_{edit_scenario}_{cat}_{item_key}",
+                                             type="primary"):
+                                    saved = 0
+                                    for _, r in edited.iterrows():
+                                        asin = r["ASIN"]
+                                        default_val = bucket.get((asin, _WILDCARD),
+                                                        bucket.get((_WILDCARD, _WILDCARD), 0.0))
+                                        for ym in all_months:
+                                            new_v = float(r[ym])
+                                            cur_override = bucket.get((asin, ym))
+                                            # Skip if unchanged
+                                            if cur_override is None:
+                                                # Only save if different from default
+                                                if abs(new_v - default_val) > 1e-6:
+                                                    save_value(edit_scenario, cat, item_key,
+                                                               asin, ym, new_v)
+                                                    saved += 1
+                                            else:
+                                                if abs(new_v - cur_override) > 1e-6:
+                                                    save_value(edit_scenario, cat, item_key,
+                                                               asin, ym, new_v)
+                                                    saved += 1
+                                    if saved:
+                                        st.success(f"✅ Guardados {saved} overrides mensuales")
+                                        st.rerun()
+                                    else:
+                                        st.info("Nada que guardar — no hay cambios")
+                            with cR:
+                                st.caption(
+                                    "💡 Para borrar un override y volver al default, edítalo manualmente en Supabase "
+                                    f"(DELETE FROM pnl_assumptions WHERE scenario='{edit_scenario}' "
+                                    f"AND item_name='{item_key}' AND year_month='...')."
+                                )
 
     st.divider()
     st.caption(
