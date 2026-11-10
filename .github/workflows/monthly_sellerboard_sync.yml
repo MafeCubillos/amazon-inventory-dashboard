@@ -1,0 +1,50 @@
+name: Monthly Sellerboard P&L Sync
+
+on:
+  schedule:
+    # Day 2 of each month at 06:00 UTC — Sellerboard publishes the previous
+    # month's report on day 1, so we wait a few hours to be safe.
+    - cron: '0 6 2 * *'
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'Optional note for logs'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  sync-sellerboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install supabase python-dotenv requests
+
+      - name: Sync Sellerboard CSVs into Supabase
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SELLERBOARD_URL_MONTH:     ${{ secrets.SELLERBOARD_URL_MONTH }}
+          SELLERBOARD_URL_PRODUCT:   ${{ secrets.SELLERBOARD_URL_PRODUCT }}
+        run: |
+          python -c "
+          import sys, logging
+          logging.basicConfig(level=logging.INFO)
+          from backend.fetchers.sellerboard import sync_sellerboard
+          n_product, n_month, warns = sync_sellerboard()
+          print(f'Product rows: {n_product}')
+          print(f'Month rows:   {n_month}')
+          for w in warns:
+              print(f'WARNING: {w}')
+          # Fail the job only if NOTHING at all was written AND there were warnings
+          if n_product == 0 and n_month == 0 and warns:
+              sys.exit(1)
+          "
