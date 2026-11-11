@@ -4097,6 +4097,11 @@ def render_pnl_builder_page(rows: list[dict]):
                          key="pnl_seed_defaults",
                          help="TACOS 20%, VAT 10%, referral 15%"):
                 n = seed_global_defaults()
+                # Clear widget state so the inputs re-read from DB (Streamlit
+                # caches number_input values by key, which masks fresh values)
+                for k in list(st.session_state.keys()):
+                    if isinstance(k, str) and k.startswith("pnl_"):
+                        del st.session_state[k]
                 st.success(f"{n} defaults insertados (scenario='base')")
                 st.rerun()
         with cS2:
@@ -4111,6 +4116,9 @@ def render_pnl_builder_page(rows: list[dict]):
                     st.success(f"✅ {n} planned products creados/actualizados")
                 for w in warns[:10]:
                     st.warning(w)
+                for k in list(st.session_state.keys()):
+                    if isinstance(k, str) and k.startswith("pnl_"):
+                        del st.session_state[k]
                 st.rerun()
 
     st.divider()
