@@ -275,6 +275,26 @@ button[data-testid="baseButton-primary"]:hover {
     border-radius: 8px !important;
     font-weight: 600 !important;
 }
+/* Fix for expander label overlapping the arrow icon in some Streamlit builds */
+[data-testid="stExpander"] details > summary,
+[data-testid="stExpanderDetails"] > summary,
+details[data-testid="stExpanderDetails"] > summary {
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 10px 14px !important;
+}
+[data-testid="stExpander"] details > summary > span,
+[data-testid="stExpander"] details > summary p {
+    margin: 0 !important;
+    padding-left: 4px !important;
+    font-weight: 600 !important;
+    line-height: 1.4 !important;
+}
+[data-testid="stExpander"] details > summary svg {
+    flex-shrink: 0 !important;
+    margin-right: 6px !important;
+}
 /* ── Topbar buttons row ─────── */
 .topbar-btn-row button {
     height: 36px !important;
@@ -1967,21 +1987,31 @@ def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
 # ══════════════════════════════════════════════════════════════
 # Shared HTML table helper — unified Nyvos dark header style
 # ══════════════════════════════════════════════════════════════
-def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
-    """Render a read-only HTML table matching Amazon Inventory's header style.
+_NYVOS_TBL_COUNTER = {"n": 0}
 
-    columns: list of {"key": str, "label": str, "width": str, "align": str ("left"|"right"|"center")}
-    rows:    list of dicts keyed by `key`; values are already-formatted strings.
+def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
+    """Render a sortable HTML table matching Amazon Inventory's header style.
+
+    columns: list of {"key": str, "label": str, "width": str, "align": str, "sort_type": "num"|"text"}
+    rows:    list of dicts keyed by `key`; values are already-formatted strings (HTML allowed).
+             For numeric sorting, pass a data-sort attribute via the "sort_val" key in rows
+             (otherwise text content is parsed with parseFloat).
     """
+    _NYVOS_TBL_COUNTER["n"] += 1
+    tid = f"nyvos_tbl_{_NYVOS_TBL_COUNTER['n']}"
+
     ths = ""
-    for c in columns:
+    for i, c in enumerate(columns):
+        stype = c.get("sort_type", "num" if c.get("align") == "right" else "text")
         ths += (
-            f'<th style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
+            f'<th onclick="nyvosSort_{tid}({i},\'{stype}\')" '
+            f'style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
             f'color:#E8C879;padding:11px 10px;font-size:11.5px;font-weight:800;'
             f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;'
             f'background:#111111;position:sticky;top:0;z-index:10;'
+            f'cursor:pointer;user-select:none;'
             f'box-shadow:0 1px 0 rgba(255,255,255,0.08)">'
-            f'{c["label"]}</th>'
+            f'{c["label"]} <span id="{tid}_si_{i}" style="font-size:9px;opacity:0.5">⇅</span></th>'
         )
     body = ""
     for i, r in enumerate(rows):
@@ -1989,17 +2019,61 @@ def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
         tds = ""
         for c in columns:
             v = r.get(c["key"], "")
+            sv = r.get(c["key"] + "__sort", "")
+            data_attr = f' data-sort="{sv}"' if sv != "" else ""
             tds += (
-                f'<td style="padding:10px 10px;text-align:{c.get("align","left")};'
+                f'<td{data_attr} style="padding:10px 10px;text-align:{c.get("align","left")};'
                 f'font-size:12.5px;color:#111;border-bottom:1px solid #EEE;'
                 f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
                 f'{v}</td>'
             )
         body += f'<tr style="background:{bg}" onmouseover="this.style.background=\'#F5F5F0\'" onmouseout="this.style.background=\'{bg}\'">{tds}</tr>'
+
+    sort_js = f"""
+<script>
+window.nyvosSort_{tid}_dir = window.nyvosSort_{tid}_dir || {{}};
+function nyvosSort_{tid}(colIdx, kind) {{
+    var tbl = document.getElementById('{tid}');
+    if (!tbl) return;
+    var tbody = tbl.tBodies[0];
+    var rows = Array.from(tbody.rows);
+    var prev = window.nyvosSort_{tid}_dir[colIdx] || 0;
+    var dir = prev === 1 ? -1 : 1;
+    window.nyvosSort_{tid}_dir = {{}};
+    window.nyvosSort_{tid}_dir[colIdx] = dir;
+    rows.sort(function(a, b) {{
+        var ca = a.cells[colIdx], cb = b.cells[colIdx];
+        var va = ca.dataset.sort !== undefined ? ca.dataset.sort : ca.innerText.trim();
+        var vb = cb.dataset.sort !== undefined ? cb.dataset.sort : cb.innerText.trim();
+        if (kind === 'num') {{
+            var na = parseFloat(va.replace(/[^0-9.\-]/g,'')) || 0;
+            var nb = parseFloat(vb.replace(/[^0-9.\-]/g,'')) || 0;
+            return (na - nb) * dir;
+        }}
+        return va.localeCompare(vb) * dir;
+    }});
+    rows.forEach(function(r, i) {{
+        var bg = i % 2 === 0 ? '#FFFFFF' : '#FBFAF7';
+        r.style.background = bg;
+        r.setAttribute('onmouseover', "this.style.background='#F5F5F0'");
+        r.setAttribute('onmouseout', "this.style.background='" + bg + "'");
+        tbody.appendChild(r);
+    }});
+    // Update indicators
+    var ths = tbl.tHead.rows[0].cells;
+    for (var k = 0; k < ths.length; k++) {{
+        var si = document.getElementById('{tid}_si_' + k);
+        if (si) si.innerText = (k === colIdx) ? (dir === 1 ? '▲' : '▼') : '⇅';
+        if (si) si.style.opacity = (k === colIdx) ? '1' : '0.5';
+    }}
+}}
+</script>"""
+
     return (
+        sort_js +
         f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
         f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
-        f'<table style="width:100%;border-collapse:collapse;table-layout:auto;font-family:Inter,sans-serif">'
+        f'<table id="{tid}" style="width:100%;border-collapse:collapse;table-layout:auto;font-family:Inter,sans-serif">'
         f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>'
     )
 
@@ -2085,7 +2159,7 @@ def render_local_stock_page(inventory_rows: list[dict]):
                 "updated": f'<span style="color:#888;font-size:11.5px">{r["Last updated"]}</span>',
                 "notes":   f'<span style="color:#666">{r["Notes"]}</span>',
             })
-        st.markdown(
+        components.html(
             _nyvos_table_html(
                 columns=[
                     {"key": "ASIN",    "label": "ASIN",         "width": "130px", "align": "left"},
@@ -2096,7 +2170,8 @@ def render_local_stock_page(inventory_rows: list[dict]):
                 ],
                 rows=html_rows,
             ),
-            unsafe_allow_html=True,
+            height=min(620, 90 + 40 * len(html_rows)),
+            scrolling=True,
         )
 
         # ── Edit mode (inline editing) ─────────────────────────
@@ -2486,20 +2561,34 @@ def render_tiktok_page(inventory_rows: list[dict]):
             status_v = r["Status"]
             days_v   = r["Days left"]
             days_col = {"🔴": "#C0392B", "🟡": "#B7791F", "🟢": "#2F855A"}.get(status_v, "#888")
+            # Numeric sort values
+            days_sort_num = -1
+            if isinstance(days_v, str) and days_v not in ("—", "∞"):
+                try:
+                    days_sort_num = float(days_v.replace("d", ""))
+                except Exception:
+                    days_sort_num = -1
+            elif days_v == "∞":
+                days_sort_num = 1e9
+            status_order = {"🔴": 0, "🟡": 1, "🟢": 2, "⚫": 3}.get(status_v, 9)
             html_rows.append({
                 "ASIN":    f'<code style="background:#F4F0E8;padding:2px 6px;border-radius:4px;'
                            f'font-size:11px;color:#111">{r["ASIN"]}</code>',
                 "Product": r["Product"],
                 "units":   units_html,
+                "units__sort":   str(units_v),
                 "vreal":   f'{float(r["TT vel (30d real)"]):.2f}',
                 "sold30":  f'{int(r["TT sold 30d"]):,}',
+                "sold30__sort":  str(int(r["TT sold 30d"])),
                 "fcday":   f'{float(r["TT fc /day"]):.2f}',
                 "status":  f'<span style="font-size:14px">{status_v}</span>',
+                "status__sort": str(status_order),
                 "days":    f'<span style="color:{days_col};font-weight:700">{days_v}</span>',
+                "days__sort":    str(days_sort_num),
                 "updated": f'<span style="color:#888;font-size:11.5px">{r["Last updated"]}</span>',
                 "notes":   f'<span style="color:#666">{r["Notes"]}</span>',
             })
-        st.markdown(
+        components.html(
             _nyvos_table_html(
                 columns=[
                     {"key": "ASIN",    "label": "ASIN",           "width": "130px", "align": "left"},
@@ -2515,7 +2604,8 @@ def render_tiktok_page(inventory_rows: list[dict]):
                 ],
                 rows=html_rows,
             ),
-            unsafe_allow_html=True,
+            height=min(620, 90 + 40 * len(html_rows)),
+            scrolling=True,
         )
 
         # ── Edit mode (inline editing) ─────────────────────────
