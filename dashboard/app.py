@@ -169,45 +169,60 @@ section[data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] .stMarkdown *,
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] span { color: #ccc !important; }
+/* Tighten sidebar inner padding */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding: 0 !important;
+}
+section[data-testid="stSidebar"] .block-container {
+    padding: 0 !important;
+}
+/* Sidebar button row tighter */
+section[data-testid="stSidebar"] .stButton {
+    margin: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+}
 [data-testid="stSidebarNav"] { display: none; }
 /* Hide collapse button — sidebar is always visible, can never be hidden */
 [data-testid="stSidebarHeader"] { display: none !important; }
 /* ── Sidebar nav — active button ─── */
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
-    background: #1A1A1A !important;
+    background: rgba(201, 162, 90, 0.08) !important;
+    border: none !important;
     border-left: 3px solid #C9A25A !important;
-    border-top: none !important;
-    border-right: none !important;
-    border-bottom: none !important;
-    border-radius: 0 6px 6px 0 !important;
-    color: #C9A25A !important;
-    font-weight: 700 !important;
-    font-size: 13px !important;
+    border-radius: 0 !important;
+    color: #F4EEDF !important;
+    font-weight: 600 !important;
+    font-size: 13.5px !important;
     text-align: left !important;
-    padding: 10px 16px !important;
-    margin: 2px 0 !important;
+    padding: 9px 20px 9px 17px !important;
+    margin: 1px 0 !important;
     box-shadow: none !important;
+    transition: background .15s ease !important;
 }
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
-    background: #222 !important;
+    background: rgba(201, 162, 90, 0.14) !important;
 }
 /* ── Sidebar nav — inactive button ─── */
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
     background: transparent !important;
     border: none !important;
     border-left: 3px solid transparent !important;
-    border-radius: 0 6px 6px 0 !important;
-    color: #777 !important;
-    font-size: 13px !important;
+    border-radius: 0 !important;
+    color: #999 !important;
+    font-weight: 500 !important;
+    font-size: 13.5px !important;
     text-align: left !important;
-    padding: 10px 16px !important;
-    margin: 2px 0 !important;
+    padding: 9px 20px 9px 17px !important;
+    margin: 1px 0 !important;
     box-shadow: none !important;
+    transition: background .15s ease, color .15s ease !important;
 }
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {
-    background: #1A1A1A !important;
-    color: #ccc !important;
-    border-left: 3px solid #444 !important;
+    background: rgba(255,255,255,0.03) !important;
+    color: #ddd !important;
+    border-left: 3px solid #333 !important;
 }
 /* ── Primary button → accent ─ */
 button[data-testid="baseButton-primary"] {
@@ -937,9 +952,11 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
 
         def _section(label: str):
             st.markdown(
-                f"<div style='font-size:10px;color:#555;letter-spacing:.14em;"
-                f"font-weight:700;padding:14px 16px 4px;text-transform:uppercase'>"
-                f"{label}</div>",
+                f"""<div style='font-size:10px;color:#555;letter-spacing:.18em;
+                font-weight:700;padding:20px 20px 6px;text-transform:uppercase;
+                border-bottom:none'>
+                {label}
+                </div>""",
                 unsafe_allow_html=True,
             )
 
@@ -955,22 +972,22 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
         _nav("🏠", "Home", "home")
 
         _section("Operations")
-        _nav("📦", "Inventory",       "inventory")
-        _nav("🚚", "Reorder",         "reorder")
-        _nav("🧾", "Purchase Orders", "purchase_orders")
-        _nav("📋", "Orders",          "orders")
-        _nav("🏷️", "Labels",          "labels")
-        _nav("🏠", "Local Stock",     "local")
-        _nav("🎵", "TikTok",          "tiktok")
+        _nav("📦", "Amazon Inventory", "inventory")
+        _nav("🎵", "TikTok Inventory", "tiktok")
+        _nav("🏠", "Local Warehouse",  "local")
+        _nav("🏷️", "Label Stock",      "labels")
+        _nav("🚚", "Reorder Planner",  "reorder")
+        _nav("📋", "Open POs",         "orders")
+        _nav("🧾", "New PO",           "purchase_orders")
 
         _section("Forecasting")
         _nav("📈", "Forecast",         "forecast")
         _nav("📊", "Forecast Builder", "forecast_builder")
 
-        _section("P&L")
-        _nav("💶", "Builder",       "pnl_builder")
-        _nav("📊", "View",          "pnl_view")
-        _nav("💰", "TikTok Finance", "finance")
+        _section("Finance")
+        _nav("💶", "P&L Builder",      "pnl_builder")
+        _nav("📊", "P&L View",         "pnl_view")
+        _nav("💰", "TikTok Finance",   "finance")
 
         _section(" ")   # spacer
         _nav("⚙️", "Settings", "settings")
