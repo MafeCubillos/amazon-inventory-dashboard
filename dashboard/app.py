@@ -106,8 +106,25 @@ COUNTRY_NAMES = {
 def inject_css():
     st.markdown("""
 <style>
+/* Nyvos brand font — Inter (web-safe closest to Armio family) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+html, body, [class*="st-"], [data-testid="stAppViewContainer"] *,
+section[data-testid="stSidebar"] * {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif !important;
+    letter-spacing: -0.005em;
+}
+/* Nyvos headings — tighter, stronger */
+h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em !important;
+    font-weight: 700 !important;
+}
+
 :root {
-    --accent: #C8FF00;
+    --accent:        #C9A25A;    /* Nyvos warm gold */
+    --accent-hover:  #B08C45;
+    --accent-soft:   #F4EEDF;    /* soft gold tint for backgrounds */
+    --cream:         #F4F0E8;    /* BALANCE territory cream */
     --black:  #111111;
     --bg:     #F4F4F2;
     --white:  #FFFFFF;
@@ -158,12 +175,12 @@ section[data-testid="stSidebar"] span { color: #ccc !important; }
 /* ── Sidebar nav — active button ─── */
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
     background: #1A1A1A !important;
-    border-left: 3px solid #C8FF00 !important;
+    border-left: 3px solid #C9A25A !important;
     border-top: none !important;
     border-right: none !important;
     border-bottom: none !important;
     border-radius: 0 6px 6px 0 !important;
-    color: #C8FF00 !important;
+    color: #C9A25A !important;
     font-weight: 700 !important;
     font-size: 13px !important;
     text-align: left !important;
@@ -201,7 +218,7 @@ button[data-testid="baseButton-primary"] {
     border-radius: 6px !important;
 }
 button[data-testid="baseButton-primary"]:hover {
-    background: #b8ef00 !important;
+    background: var(--accent-hover) !important;
 }
 /* ── Tabs ──────────────────── */
 .stTabs [data-baseweb="tab-list"] { gap: 4px; background: transparent; }
@@ -220,7 +237,7 @@ button[data-testid="baseButton-primary"]:hover {
     background: #fff;
     border-radius: 10px;
     border: 0.5px solid #E0E0E0;
-    border-top: 3px solid #C8FF00;
+    border-top: 3px solid #C9A25A;
     padding: 18px 20px;
     transition: box-shadow .2s, transform .2s;
 }
@@ -264,7 +281,7 @@ button[data-testid="baseButton-primary"]:hover {
     --gdg-header-bg: #111111;
     --gdg-header-fg: #FFFFFF;
     --gdg-header-icon-fg: #FFFFFF;
-    --gdg-accent-color: #C6FF00;
+    --gdg-accent-color: #C9A25A;
     --gdg-header-bottom-border-color: #111111;
     --gdg-horizontal-border-color: #E8E8E8;
     --gdg-vertical-border-color: #E8E8E8;
@@ -590,7 +607,7 @@ def make_sparkline(values: list[float], w: int = 60, h: int = 22) -> str:
         y = h - 2 - (v - mn) / rng * (h - 4)
         pts.append(f"{x:.1f},{y:.1f}")
     return (f'<svg width="{w}" height="{h}" style="display:block;overflow:visible">'
-            f'<path d="M {" L ".join(pts)}" fill="none" stroke="#C8FF00" '
+            f'<path d="M {" L ".join(pts)}" fill="none" stroke="#C9A25A" '
             f'stroke-width="1.5" stroke-linejoin="round"/></svg>')
 
 
@@ -682,7 +699,7 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
     ths = ""
     for label, width, right in COLS:
         align = "right" if right else "left"
-        color = "#C8FF00"
+        color = "#C9A25A"
         sort_attr = SORTABLE.get(label, "")
         cursor = "cursor:pointer;user-select:none;" if sort_attr else ""
         onclick = f' onclick="sortTable(\'{sort_attr}\')"' if sort_attr else ""
@@ -912,31 +929,51 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
 </style>
 <div style="padding:28px 12px 20px;border-bottom:1px solid #222;margin-bottom:12px">
   {LOGO_IMG_SM}
-  <div style="font-size:10px;color:#666;margin-top:10px;letter-spacing:.14em;font-weight:600">OPERATIONS HUB</div>
+  <div style="font-size:10px;color:#C9A25A;margin-top:10px;letter-spacing:.2em;font-weight:700">NYVOS · OPS HUB</div>
 </div>""", unsafe_allow_html=True)
 
-        # ── Navigation buttons ─────────────────────────────────
-        current = st.session_state.get("page", "inventory")
-        nav_items = [("📦", "Inventory",       "inventory"),
-                     ("🚚", "Reorder",         "reorder"),
-                     ("🧾", "Purchase Orders", "purchase_orders"),
-                     ("📋", "Orders",          "orders"),
-                     ("🏷️", "Labels",          "labels"),
-                     ("🏠", "Local Stock",     "local"),
-                     ("🎵", "TikTok",          "tiktok"),
-                     ("💰", "Finance-TikTok",  "finance"),
-                     ("📈", "Forecast",        "forecast"),
-                     ("📊", "Forecast Builder","forecast_builder"),
-                     ("💶", "P&L Builder",     "pnl_builder"),
-                     ("⚙️", "Settings",        "settings")]
+        # ── Navigation (grouped) ─────────────────────────────────
+        current = st.session_state.get("page", "home")
 
-        for icon, label, key in nav_items:
+        def _section(label: str):
+            st.markdown(
+                f"<div style='font-size:10px;color:#555;letter-spacing:.14em;"
+                f"font-weight:700;padding:14px 16px 4px;text-transform:uppercase'>"
+                f"{label}</div>",
+                unsafe_allow_html=True,
+            )
+
+        def _nav(icon: str, label: str, key: str):
             active = current == key
             if st.button(f"{icon}  {label}", key=f"nav_{key}",
                          use_container_width=True,
                          type="primary" if active else "secondary"):
                 st.session_state.page = key
                 st.rerun()
+
+        # Top-level: Home
+        _nav("🏠", "Home", "home")
+
+        _section("Operations")
+        _nav("📦", "Inventory",       "inventory")
+        _nav("🚚", "Reorder",         "reorder")
+        _nav("🧾", "Purchase Orders", "purchase_orders")
+        _nav("📋", "Orders",          "orders")
+        _nav("🏷️", "Labels",          "labels")
+        _nav("🏠", "Local Stock",     "local")
+        _nav("🎵", "TikTok",          "tiktok")
+
+        _section("Forecasting")
+        _nav("📈", "Forecast",         "forecast")
+        _nav("📊", "Forecast Builder", "forecast_builder")
+
+        _section("P&L")
+        _nav("💶", "Builder",       "pnl_builder")
+        _nav("📊", "View",          "pnl_view")
+        _nav("💰", "TikTok Finance", "finance")
+
+        _section(" ")   # spacer
+        _nav("⚙️", "Settings", "settings")
 
         mode_text = "🧪 Demo mode" if DEMO_MODE else "🟢 Live"
         st.markdown(f"""
@@ -4472,6 +4509,308 @@ def render_pnl_builder_page(rows: list[dict]):
 
 
 # ══════════════════════════════════════════════════════════════
+# P&L VIEW — consolidated monthly P&L (actuals + projected)
+# ══════════════════════════════════════════════════════════════
+
+def render_pnl_view_page(rows: list[dict]):
+    import pandas as _pd
+    from backend.pnl_view import compute_pnl
+    from backend.pnl_assumptions import SCENARIOS, get_active_scenario
+
+    st.markdown("#### 📊 P&L View (actuals + projected)")
+    st.caption(
+        "Vista consolidada. Columnas = meses. "
+        "**Meses pasados** (de Sellerboard, histórico real) · "
+        "**Meses futuros** (proyectados con los assumptions del scenario seleccionado)."
+    )
+
+    # Scenario toggle
+    cS, cN = st.columns([1, 3])
+    with cS:
+        scenario = st.selectbox(
+            "🎯 Scenario",
+            options=SCENARIOS,
+            index=SCENARIOS.index(get_active_scenario()),
+            key="pnl_view_scenario",
+        )
+    with cN:
+        months_back_opt = st.radio(
+            "Histórico mostrado:",
+            options=[("Últimos 6M", 6), ("Últimos 12M", 12), ("Últimos 24M", 24)],
+            format_func=lambda x: x[0],
+            horizontal=True, index=1, key="pnl_view_hist",
+        )
+    months_back = months_back_opt[1]
+
+    with st.spinner("Calculando P&L…"):
+        data = compute_pnl(scenario=scenario, months_back=months_back)
+
+    months = data["months"]
+    lines  = data["lines"]
+    cutoff = data["actual_ym_cutoff"]
+
+    # ── Helper to build a row ──────────────────────────────────
+    def row(label: str, line_key: str, fmt: str = "€{:,.0f}", bold: bool = False) -> dict:
+        d = {"Línea": ("**" + label + "**") if bold else label}
+        for ym in months:
+            v = lines.get(line_key, {}).get(ym)
+            if v is None:
+                d[ym] = ""
+            elif "%" in fmt:
+                d[ym] = fmt.format(v * 100)
+            elif "{:,.0f}" in fmt and abs(v) < 1 and v != 0:
+                d[ym] = fmt.format(v)
+            else:
+                d[ym] = fmt.format(v)
+        return d
+
+    pnl_rows = [
+        row("UNIT SALES",          "unit_sales",         fmt="{:,.0f}",   bold=True),
+        row("  Avg Consumer Price (incl IVA)", "price_avg", fmt="€{:,.2f}"),
+        {"Línea": "─" * 30, **{ym: "" for ym in months}},
+        row("GMV incl. VAT",       "gmv_incl_vat_calc",  fmt="€{:,.0f}",  bold=True),
+        row("  Promo / Vine",      "promo",              fmt="€{:,.0f}"),
+        row("  VAT",               "vat",                fmt="€{:,.0f}"),
+        row("GMV excl. VAT",       "gmv_excl_vat",       fmt="€{:,.0f}",  bold=True),
+        {"Línea": "─" * 30, **{ym: "" for ym in months}},
+        row("Cost of Goods",       "product_cost",       fmt="€{:,.0f}"),
+        row("GROSS PROFIT",        "gross_profit",       fmt="€{:,.0f}",  bold=True),
+        row("  Gross Margin %",    "gross_margin_pct",   fmt="{:,.1f}%"),
+        {"Línea": "─" * 30, **{ym: "" for ym in months}},
+        row("TACOS (Ads)",         "tacos_cost",         fmt="€{:,.0f}"),
+        row("Amazon Fees Total",   "amazon_fees_total",  fmt="€{:,.0f}"),
+        row("  Fulfillment",       "fulfillment_cost",   fmt="€{:,.0f}"),
+        row("  Referral",          "referral_cost",      fmt="€{:,.0f}"),
+        row("  Digital Services",  "digital_services",   fmt="€{:,.0f}"),
+        row("  Inbound Transp.",   "inbound_transp",     fmt="€{:,.0f}"),
+        row("  Storage",           "storage_cost",       fmt="€{:,.0f}"),
+        row("  Subscription",      "subscription",       fmt="€{:,.0f}"),
+        {"Línea": "─" * 30, **{ym: "" for ym in months}},
+        row("Total SG&A",          "total_sga",          fmt="€{:,.0f}"),
+        row("Total MKT",           "total_mkt",          fmt="€{:,.0f}"),
+        row("Manual OPEX (hist.)", "manual_opex",        fmt="€{:,.0f}"),
+        {"Línea": "─" * 30, **{ym: "" for ym in months}},
+        row("EBITDA",              "ebitda",             fmt="€{:,.0f}",  bold=True),
+        row("  EBITDA Margin %",   "ebitda_pct",         fmt="{:,.1f}%"),
+    ]
+
+    df = _pd.DataFrame(pnl_rows)
+
+    # Column config — highlight actuals vs projected
+    col_cfg = {"Línea": st.column_config.TextColumn("Línea", width="medium")}
+    for ym in months:
+        is_past = bool(cutoff) and ym <= cutoff
+        prefix = "✅ " if is_past else "📊 "
+        col_cfg[ym] = st.column_config.TextColumn(
+            prefix + ym, width="small",
+            help=("Actual (Sellerboard)" if is_past else f"Proyectado — scenario {scenario}"),
+        )
+
+    st.dataframe(df, column_config=col_cfg, hide_index=True, use_container_width=True,
+                 height=min(60 + len(pnl_rows) * 35, 900))
+
+    # Summary KPIs
+    all_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months)
+    all_ebitda = sum(lines.get("ebitda", {}).get(ym, 0) for ym in months)
+    actual_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months if ym <= cutoff)
+    proj_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months if ym > cutoff)
+
+    st.divider()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sales total período", f"€{all_sales:,.0f}")
+    c2.metric("Sales actuals", f"€{actual_sales:,.0f}")
+    c3.metric("Sales projected", f"€{proj_sales:,.0f}")
+    c4.metric("EBITDA total período", f"€{all_ebitda:,.0f}",
+              delta=f"{(all_ebitda/all_sales*100):.1f}% margen" if all_sales else "")
+
+    st.caption(
+        f"✅ = Actual · 📊 = Projected · Último mes actual: **{cutoff}** · "
+        f"Scenario activo: **{scenario.upper()}**"
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+# HOME — Overview dashboard (hero KPIs + trends + attention list)
+# ══════════════════════════════════════════════════════════════
+
+def render_home_page(rows: list[dict]):
+    import pandas as _pd
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    cur_ym = today.strftime("%Y-%m")
+
+    # ── Hero header (Nyvos brand style) ────────────────────────
+    st.markdown(f"""
+<div style="padding:28px 32px 20px;background:linear-gradient(135deg,#111 0%,#1a1a1a 100%);
+            border-radius:14px;margin-bottom:18px;color:#fff">
+  <div style="font-size:11px;color:#C9A25A;letter-spacing:.2em;font-weight:700;margin-bottom:6px">
+    NYVOS · OPERATIONS
+  </div>
+  <div style="font-size:30px;font-weight:800;letter-spacing:-.02em">
+    Good {('morning' if today.hour<12 else 'afternoon' if today.hour<19 else 'evening')}, Mafe
+  </div>
+  <div style="font-size:14px;color:#aaa;margin-top:4px">
+    {today.strftime('%A, %d %b %Y')} · estado del negocio en un vistazo
+  </div>
+</div>
+    """, unsafe_allow_html=True)
+
+    # ── Compute KPIs ───────────────────────────────────────────
+    sales_mtd  = 0.0
+    net_mtd    = 0.0
+    sales_prev = 0.0
+    try:
+        from backend.database import db_admin as _adm
+        last_row = (_adm.table("sb_actuals_total_monthly")
+                    .select("year_month,sales_eur,net_profit")
+                    .order("year_month", desc=True).limit(2).execute().data or [])
+        if len(last_row) >= 1:
+            sales_mtd = float(last_row[0].get("sales_eur") or 0)
+            net_mtd   = float(last_row[0].get("net_profit") or 0)
+        if len(last_row) >= 2:
+            sales_prev = float(last_row[1].get("sales_eur") or 0)
+    except Exception:
+        pass
+    delta_pct = ((sales_mtd - sales_prev) / sales_prev * 100) if sales_prev else 0.0
+
+    # Reorder + Inventory counts
+    n_reorder_urgent = 0
+    n_inv_critical   = 0
+    try:
+        from backend.reorder_alerts import _load_reorder_data as _lrd
+        rrows = _lrd()
+        n_reorder_urgent = sum(1 for r in rrows if r.get("alert") in ("critical", "warning"))
+    except Exception:
+        pass
+    try:
+        for r in rows:
+            if r.get("worst") == "critical":
+                n_inv_critical += 1
+    except Exception:
+        pass
+
+    # ── KPI tiles ──────────────────────────────────────────────
+    def _tile(label: str, value: str, sub: str = "", color: str = "#111",
+              bg: str = "#fff") -> str:
+        return f"""
+<div style="background:{bg};border-radius:12px;padding:20px 22px;
+            border:1px solid rgba(17,17,17,.06);
+            box-shadow:0 1px 3px rgba(0,0,0,.04);height:100%">
+  <div style="font-size:11px;color:#888;font-weight:700;letter-spacing:.1em;
+              text-transform:uppercase;margin-bottom:10px">{label}</div>
+  <div style="font-size:30px;font-weight:800;color:{color};letter-spacing:-.02em;line-height:1">
+    {value}
+  </div>
+  <div style="font-size:12px;color:#888;margin-top:6px;min-height:16px">{sub}</div>
+</div>
+        """
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        delta_arrow = "▲" if delta_pct >= 0 else "▼"
+        delta_color = "#3B6D11" if delta_pct >= 0 else "#A32D2D"
+        st.markdown(_tile(
+            "Sales — último mes cerrado",
+            f"€{sales_mtd:,.0f}",
+            f'<span style="color:{delta_color};font-weight:700">{delta_arrow} {abs(delta_pct):.1f}%</span> vs mes anterior',
+        ), unsafe_allow_html=True)
+    with c2:
+        margin = (net_mtd / sales_mtd * 100) if sales_mtd else 0
+        st.markdown(_tile(
+            "Net Profit",
+            f"€{net_mtd:,.0f}",
+            f"{margin:.1f}% margen neto",
+        ), unsafe_allow_html=True)
+    with c3:
+        st.markdown(_tile(
+            "Reorders urgentes",
+            str(n_reorder_urgent),
+            "🔴 Order now / 🟡 Soon · próximos 14d",
+            color="#A32D2D" if n_reorder_urgent > 0 else "#111",
+            bg="#FCEBEB" if n_reorder_urgent > 0 else "#fff",
+        ), unsafe_allow_html=True)
+    with c4:
+        st.markdown(_tile(
+            "Inventario crítico",
+            str(n_inv_critical),
+            "ASINs con días < lead time",
+            color="#A32D2D" if n_inv_critical > 0 else "#111",
+            bg="#FCEBEB" if n_inv_critical > 0 else "#fff",
+        ), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+    # ── 12-month trend charts ──────────────────────────────────
+    st.markdown("##### 📈 Últimos 12 meses")
+    try:
+        from backend.database import db_admin as _adm2
+        trend_rows = (_adm2.table("sb_actuals_total_monthly")
+                      .select("year_month,sales_eur,units,net_profit")
+                      .order("year_month").execute().data or [])
+        if trend_rows:
+            df_trend = _pd.DataFrame(trend_rows[-12:])
+            df_trend["margin_pct"] = (df_trend["net_profit"] / df_trend["sales_eur"] * 100).round(1)
+            df_trend = df_trend.set_index("year_month")
+            tc1, tc2, tc3 = st.columns(3)
+            with tc1:
+                st.caption("**Sales** €")
+                st.line_chart(df_trend["sales_eur"], height=160, use_container_width=True)
+            with tc2:
+                st.caption("**Units sold**")
+                st.line_chart(df_trend["units"], height=160, use_container_width=True)
+            with tc3:
+                st.caption("**Net margin %**")
+                st.line_chart(df_trend["margin_pct"], height=160, use_container_width=True)
+        else:
+            st.info("Aún no hay datos de Sellerboard — corre el sync primero.")
+    except Exception as exc:
+        st.caption(f"Charts no disponibles: {exc}")
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+    # ── Attention required ────────────────────────────────────
+    ca, cq = st.columns([2, 1])
+    with ca:
+        st.markdown("##### ⚠️ Attention required")
+        try:
+            attn: list[dict] = []
+            from backend.reorder_alerts import _load_reorder_data as _lrd2
+            rrows = _lrd2()
+            for r in rrows[:5]:
+                alert_emoji = {"critical":"🔴","warning":"🟡","upcoming":"🟠","plan":"🔵"}.get(r["alert"], "⚪")
+                attn.append({
+                    "":        alert_emoji,
+                    "Producto":   (r.get("name") or r.get("asin"))[:45],
+                    "Order by":   r.get("order_by") or "—",
+                    "Days":       r.get("days_to_order"),
+                    "Qty":        r.get("reorder_qty"),
+                })
+            if attn:
+                df_attn = _pd.DataFrame(attn)
+                st.dataframe(df_attn, hide_index=True, use_container_width=True, height=240)
+            else:
+                st.success("✅ Todo bajo control — ningún reorder urgente")
+        except Exception as exc:
+            st.caption(f"Reorder alerts no disponibles: {exc}")
+
+    with cq:
+        st.markdown("##### ⚡ Quick actions")
+        if st.button("🔄 Sync Sellerboard", key="home_sync_sb", use_container_width=True):
+            st.session_state.page = "settings"
+            st.rerun()
+        if st.button("📧 Preview emails", key="home_preview_em", use_container_width=True):
+            st.session_state.page = "settings"
+            st.rerun()
+        if st.button("🚚 Open Reorder Planner", key="home_reorder", use_container_width=True):
+            st.session_state.page = "reorder"
+            st.rerun()
+        if st.button("📊 Open P&L View", key="home_pnl", use_container_width=True):
+            st.session_state.page = "pnl_view"
+            st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════
 # SETTINGS TAB
 # ══════════════════════════════════════════════════════════════
 
@@ -5094,15 +5433,19 @@ if DEMO_MODE:
 st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
 # ── Page content driven by sidebar nav ────────────────────────
-page = st.session_state.get("page", "inventory")
+page = st.session_state.get("page", "home")
 
 # ── Marketplace cards — only on Amazon-centric pages ──────────
 # TikTok / Labels / Local / Forecast / Settings have their own headers.
 if page in ("inventory", "reorder", "orders"):
     render_mp_cards(rows)
 
+# ════════ PAGE: HOME (Overview) ════════
+if page == "home":
+    render_home_page(rows)
+
 # ════════ PAGE: INVENTORY ════════
-if page == "inventory":
+elif page == "inventory":
     st.markdown("#### 📦 Inventory", unsafe_allow_html=False)
     fc1, fc2, fc3, fc4, fc5 = st.columns([3, 3, 2, 2, 2])
     with fc1:
@@ -5198,6 +5541,10 @@ elif page == "forecast_builder":
 # ════════ PAGE: P&L BUILDER (Assumptions with scenarios) ════════
 elif page == "pnl_builder":
     render_pnl_builder_page(rows)
+
+# ════════ PAGE: P&L VIEW (actuals + projected) ════════
+elif page == "pnl_view":
+    render_pnl_view_page(rows)
 
 # ════════ PAGE: SETTINGS ════════
 elif page == "settings":
