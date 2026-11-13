@@ -5431,18 +5431,47 @@ for k, v in [("mp_filter", list(MARKETPLACES)), ("alert_filter", ["critical","wa
 
 rows = load_master(warn_buffer=st.session_state.warn_buffer)
 
-# ── Topbar ─────────────────────────────────────────────────────
+# ── Page title mapping (updates topbar per section) ────────────
+_CURRENT_PAGE = st.session_state.get("page", "home")
+PAGE_META = {
+    "home":             ("🏠", "Home",              "Business snapshot at a glance"),
+    "inventory":        ("📦", "Amazon Inventory",  "Current stock across EU marketplaces"),
+    "reorder":          ("🚚", "Reorder Planner",   "Products that need a supplier PO"),
+    "purchase_orders":  ("🧾", "New Purchase Order","Create a new supplier PO"),
+    "orders":           ("📋", "Open POs",          "Purchase orders placed with suppliers"),
+    "labels":           ("🏷️", "Label Stock",       "Label inventory & orders"),
+    "local":            ("🏠", "Local Warehouse",   "Inventory in your own warehouse"),
+    "tiktok":           ("🎵", "TikTok Inventory",  "Units at TikTok fulfillment"),
+    "finance":          ("💰", "TikTok Finance",    "TikTok sales & P&L view"),
+    "forecast":         ("📈", "Forecast",          "Google Sheet forecast viewer"),
+    "forecast_builder": ("📊", "Forecast Builder",  "Auto projections from real sales"),
+    "pnl_builder":      ("💶", "P&L Builder",       "Assumptions · bear / base / bull scenarios"),
+    "pnl_view":         ("📊", "P&L View",          "Consolidated P&L (actuals + projected)"),
+    "settings":         ("⚙️", "Settings",          "Alert thresholds & system config"),
+}
+_icon, _title, _subtitle = PAGE_META.get(_CURRENT_PAGE, ("", "Nyvos", ""))
+
+# ── Topbar (dynamic per page) ──────────────────────────────────
 st.markdown(f"""
 <div style="background:#111;padding:16px 28px;border-radius:10px;margin-bottom:8px;
             display:flex;align-items:center;justify-content:space-between">
   <div style="display:flex;align-items:center;gap:20px">
     {LOGO_IMG}
-    <div style="width:1px;height:36px;background:rgba(255,255,255,0.15)"></div>
-    <span style="font-size:16px;font-weight:600;color:#fff;letter-spacing:.02em">
-      Operations Hub
-    </span>
+    <div style="width:1px;height:42px;background:rgba(255,255,255,0.15)"></div>
+    <div>
+      <div style="font-size:10px;color:#C9A25A;letter-spacing:.24em;
+                   font-weight:700;text-transform:uppercase;line-height:1;margin-bottom:6px">
+        NYVOS · Operations
+      </div>
+      <div style="font-size:17px;font-weight:700;color:#fff;letter-spacing:-.01em;line-height:1.1">
+        {_icon}&nbsp;&nbsp;{_title}
+        <span style="font-size:13px;font-weight:400;color:#888;margin-left:14px;letter-spacing:0">
+          {_subtitle}
+        </span>
+      </div>
+    </div>
   </div>
-  <div style="font-size:13px;color:#aaa;display:flex;align-items:center;gap:8px">
+  <div style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:8px">
     <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
                  background:#4CAF50"></span>
     Last sync: 2h ago
