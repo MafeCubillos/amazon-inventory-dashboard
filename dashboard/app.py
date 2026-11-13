@@ -1657,81 +1657,78 @@ def render_labels_page(inventory_rows: list[dict]):
             })
         df_view = pd.DataFrame(rows_view)
 
-        edited = st.data_editor(
+        # ── Nyvos HTML table (read-only, unified dark header) ──
+        _render_nyvos_df(
             df_view,
-            column_config={
-                "ASIN":                 st.column_config.TextColumn("ASIN", disabled=True),
-                "Product":              st.column_config.TextColumn("Product", disabled=True,
-                                                                    width="large"),
-                "Snapshot":             st.column_config.NumberColumn(
-                                            "Snapshot", min_value=0, step=100,
-                                            help="Labels on hand as of Snapshot date."),
-                "Snapshot date":        st.column_config.DateColumn(
-                                            "Snapshot date",
-                                            help="When you took this count. Receipts after this date are auto-applied."),
-                "Adj since":            st.column_config.NumberColumn(
-                                            "Adj since", disabled=True,
-                                            help="+ received label orders − received bottle POs (since snapshot)"),
-                "Current":              st.column_config.NumberColumn(
-                                            "Current", disabled=True,
-                                            help="Effective current = Snapshot + Adj since"),
-                "Incoming":             st.column_config.NumberColumn(
-                                            "Incoming", disabled=True,
-                                            help="Pending label orders (en route from supplier)"),
-                "MOQ":                  st.column_config.NumberColumn(
-                                            "MOQ (bottles)", min_value=0, step=100,
-                                            help="Minimum order quantity from your bottle supplier."),
-                "Committed (open POs)": st.column_config.NumberColumn(
-                                            "Committed (open POs)", disabled=True),
-                "Required":             st.column_config.NumberColumn(
-                                            "Required", disabled=True,
-                                            help=f"committed + max(committed × {buffer_pct}%, MOQ)"),
-                "Net vs required":      st.column_config.NumberColumn(
-                                            "Net vs required", disabled=True,
-                                            help=("(Current + Incoming) − Required. "
-                                                  "Negative = order more labels.")),
-                "🛒 Order now":         st.column_config.NumberColumn(
-                                            "🛒 Order now", disabled=True,
-                                            help=("Rounded UP to next MOQ multiple. "
-                                                  "Zero = no order needed.")),
-                "Reason":               st.column_config.TextColumn(
-                                            "Reason", disabled=True,
-                                            help=("🛑 Shortage = open POs can't be covered. "
-                                                  "🛡️ Buffer = open POs covered, just keeping "
-                                                  "safety reserve. Buffer alerts are much less urgent.")),
-                "Next deadline":        st.column_config.DateColumn(
-                                            "Next deadline", disabled=True),
-                "Status":               st.column_config.TextColumn("Status", disabled=True),
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="lbl_stock_editor",
-            num_rows="fixed",
+            widths={"ASIN": "110px", "Product": "auto", "Snapshot date": "110px",
+                    "Next deadline": "110px", "Status": "70px", "Reason": "110px"},
+            aligns={"Status": "center", "Reason": "center"},
         )
 
-        if st.button("💾 Save changes", type="primary", key="save_lbl_stock"):
-            saved = 0
-            for i, row in edited.iterrows():
-                new_units = int(row["Snapshot"])
-                new_moq   = int(row["MOQ"])
-                new_snap  = row["Snapshot date"]
-                old_units = int(df_view.iloc[i]["Snapshot"])
-                old_moq   = int(df_view.iloc[i]["MOQ"])
-                old_snap  = df_view.iloc[i]["Snapshot date"]
-                if new_units != old_units or new_moq != old_moq or new_snap != old_snap:
-                    snap_str = (new_snap.isoformat()
-                                if new_snap and hasattr(new_snap, "isoformat")
-                                else (str(new_snap) if new_snap else None))
-                    if _save_label_stock(
-                        df_view.iloc[i]["ASIN"], new_units,
-                        moq=new_moq, snapshot_date=snap_str,
-                    ):
-                        saved += 1
-            if saved > 0:
-                st.success(f"Updated {saved} ASIN(s)")
-                st.rerun()
-            else:
-                st.info("No changes to save.")
+        with st.expander("✏️ Edit mode — update Snapshot, MOQ, dates", expanded=False):
+            edited = st.data_editor(
+                df_view,
+                column_config={
+                    "ASIN":                 st.column_config.TextColumn("ASIN", disabled=True),
+                    "Product":              st.column_config.TextColumn("Product", disabled=True,
+                                                                        width="large"),
+                        "Snapshot":             st.column_config.NumberColumn(
+                                                "Snapshot", min_value=0, step=100,
+                                                help="Labels on hand as of Snapshot date."),
+                    "Snapshot date":        st.column_config.DateColumn(
+                                                "Snapshot date",
+                                                help="When you took this count. Receipts after this date are auto-applied."),
+                    "Adj since":            st.column_config.NumberColumn(
+                                                "Adj since", disabled=True),
+                    "Current":              st.column_config.NumberColumn(
+                                                "Current", disabled=True),
+                    "Incoming":             st.column_config.NumberColumn(
+                                                "Incoming", disabled=True),
+                    "MOQ":                  st.column_config.NumberColumn(
+                                                "MOQ (bottles)", min_value=0, step=100),
+                    "Committed (open POs)": st.column_config.NumberColumn(
+                                                "Committed (open POs)", disabled=True),
+                    "Required":             st.column_config.NumberColumn(
+                                                "Required", disabled=True),
+                    "Net vs required":      st.column_config.NumberColumn(
+                                                "Net vs required", disabled=True),
+                    "🛒 Order now":         st.column_config.NumberColumn(
+                                                "🛒 Order now", disabled=True),
+                    "Reason":               st.column_config.TextColumn(
+                                                "Reason", disabled=True),
+                    "Next deadline":        st.column_config.DateColumn(
+                                                "Next deadline", disabled=True),
+                    "Status":               st.column_config.TextColumn("Status", disabled=True),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="lbl_stock_editor",
+                num_rows="fixed",
+            )
+
+            if st.button("💾 Save changes", type="primary", key="save_lbl_stock"):
+                saved = 0
+                for i, row in edited.iterrows():
+                    new_units = int(row["Snapshot"])
+                    new_moq   = int(row["MOQ"])
+                    new_snap  = row["Snapshot date"]
+                    old_units = int(df_view.iloc[i]["Snapshot"])
+                    old_moq   = int(df_view.iloc[i]["MOQ"])
+                    old_snap  = df_view.iloc[i]["Snapshot date"]
+                    if new_units != old_units or new_moq != old_moq or new_snap != old_snap:
+                        snap_str = (new_snap.isoformat()
+                                    if new_snap and hasattr(new_snap, "isoformat")
+                                    else (str(new_snap) if new_snap else None))
+                        if _save_label_stock(
+                            df_view.iloc[i]["ASIN"], new_units,
+                            moq=new_moq, snapshot_date=snap_str,
+                        ):
+                            saved += 1
+                if saved > 0:
+                    st.success(f"Updated {saved} ASIN(s)")
+                    st.rerun()
+                else:
+                    st.info("No changes to save.")
 
     # ── Tab: Label Orders (incoming label purchases) ──────────
     with t_orders:
@@ -1979,6 +1976,63 @@ def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
 # Shared HTML table helper — unified Nyvos dark header style
 # ══════════════════════════════════════════════════════════════
 _NYVOS_TBL_COUNTER = {"n": 0}
+
+def _render_nyvos_df(df: "pd.DataFrame", widths: dict | None = None,
+                     aligns: dict | None = None, formatters: dict | None = None,
+                     max_height: int = 620) -> None:
+    """Render a DataFrame as a Nyvos sortable HTML table (dark header, gold text).
+
+    widths:     {col_name: css_width}
+    aligns:     {col_name: "left"|"right"|"center"} — defaults: right for numeric, left for text
+    formatters: {col_name: callable(val) -> str}  for cell formatting
+    """
+    widths = widths or {}
+    aligns = aligns or {}
+    formatters = formatters or {}
+    numeric_cols = set(df.select_dtypes(include="number").columns)
+
+    columns = []
+    for c in df.columns:
+        align = aligns.get(c, "right" if c in numeric_cols else "left")
+        columns.append({
+            "key":   c,
+            "label": str(c),
+            "width": widths.get(c, "auto"),
+            "align": align,
+            "sort_type": "num" if c in numeric_cols else "text",
+        })
+
+    rows = []
+    for _, r in df.iterrows():
+        row_d = {}
+        for c in df.columns:
+            raw = r[c]
+            if c in formatters:
+                val = formatters[c](raw)
+            elif c in numeric_cols:
+                try:
+                    if float(raw) == int(float(raw)):
+                        val = f"{int(float(raw)):,}"
+                    else:
+                        val = f"{float(raw):,.2f}"
+                except Exception:
+                    val = str(raw) if raw is not None else ""
+            else:
+                val = "" if raw is None else str(raw)
+            row_d[c] = val
+            if c in numeric_cols:
+                try:
+                    row_d[c + "__sort"] = str(float(raw))
+                except Exception:
+                    pass
+        rows.append(row_d)
+
+    components.html(
+        _nyvos_table_html(columns=columns, rows=rows),
+        height=min(max_height, 90 + 38 * len(rows)),
+        scrolling=True,
+    )
+
 
 def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
     """Render a sortable HTML table matching Amazon Inventory's header style.
