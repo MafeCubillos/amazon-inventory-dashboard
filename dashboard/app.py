@@ -2046,8 +2046,8 @@ function nyvosSort_{tid}(colIdx, kind) {{
         var va = ca.dataset.sort !== undefined ? ca.dataset.sort : ca.innerText.trim();
         var vb = cb.dataset.sort !== undefined ? cb.dataset.sort : cb.innerText.trim();
         if (kind === 'num') {{
-            var na = parseFloat(va.replace(/[^0-9.\-]/g,'')) || 0;
-            var nb = parseFloat(vb.replace(/[^0-9.\-]/g,'')) || 0;
+            var na = parseFloat(String(va).replace(/[^0-9.\\-]/g,'')) || 0;
+            var nb = parseFloat(String(vb).replace(/[^0-9.\\-]/g,'')) || 0;
             return (na - nb) * dir;
         }}
         return va.localeCompare(vb) * dir;
