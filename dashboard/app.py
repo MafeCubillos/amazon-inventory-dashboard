@@ -139,10 +139,11 @@ h1, h2, h3, h4, h5, h6 {
 .stApp { background-color: var(--bg) !important; }
 header[data-testid="stHeader"] { display: none !important; }
 .block-container {
-    padding-top: 0.75rem !important;
-    padding-left: 2rem !important;
-    padding-right: 2rem !important;
-    max-width: 100% !important;
+    padding-top: 1rem !important;
+    padding-left: 3rem !important;
+    padding-right: 3rem !important;
+    max-width: 1600px !important;
+    margin: 0 auto !important;
 }
 /* ── Sidebar — force always visible ── */
 section[data-testid="stSidebar"],
@@ -4682,7 +4683,7 @@ def render_home_page(rows: list[dict]):
     Good {('morning' if now_hour<12 else 'afternoon' if now_hour<19 else 'evening')}, Mafe
   </div>
   <div style="font-size:14px;color:#aaa;margin-top:4px">
-    {today.strftime('%A, %d %b %Y')} · estado del negocio en un vistazo
+    {today.strftime('%A, %d %b %Y')} · business snapshot at a glance
   </div>
 </div>
     """, unsafe_allow_html=True)
@@ -4742,30 +4743,30 @@ def render_home_page(rows: list[dict]):
         delta_arrow = "▲" if delta_pct >= 0 else "▼"
         delta_color = "#3B6D11" if delta_pct >= 0 else "#A32D2D"
         st.markdown(_tile(
-            "Sales — último mes cerrado",
+            "Sales — last closed month",
             f"€{sales_mtd:,.0f}",
-            f'<span style="color:{delta_color};font-weight:700">{delta_arrow} {abs(delta_pct):.1f}%</span> vs mes anterior',
+            f'<span style="color:{delta_color};font-weight:700">{delta_arrow} {abs(delta_pct):.1f}%</span> vs prior month',
         ), unsafe_allow_html=True)
     with c2:
         margin = (net_mtd / sales_mtd * 100) if sales_mtd else 0
         st.markdown(_tile(
             "Net Profit",
             f"€{net_mtd:,.0f}",
-            f"{margin:.1f}% margen neto",
+            f"{margin:.1f}% net margin",
         ), unsafe_allow_html=True)
     with c3:
         st.markdown(_tile(
-            "Reorders urgentes",
+            "Urgent reorders",
             str(n_reorder_urgent),
-            "🔴 Order now / 🟡 Soon · próximos 14d",
+            "🔴 Order now / 🟡 Soon · next 14d",
             color="#A32D2D" if n_reorder_urgent > 0 else "#111",
             bg="#FCEBEB" if n_reorder_urgent > 0 else "#fff",
         ), unsafe_allow_html=True)
     with c4:
         st.markdown(_tile(
-            "Inventario crítico",
+            "Critical inventory",
             str(n_inv_critical),
-            "ASINs con días < lead time",
+            "ASINs with days < lead time",
             color="#A32D2D" if n_inv_critical > 0 else "#111",
             bg="#FCEBEB" if n_inv_critical > 0 else "#fff",
         ), unsafe_allow_html=True)
@@ -4773,7 +4774,7 @@ def render_home_page(rows: list[dict]):
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
     # ── 12-month trend charts ──────────────────────────────────
-    st.markdown("##### 📈 Últimos 12 meses")
+    st.markdown("##### 📈 Last 12 months")
     try:
         from backend.database import db_admin as _adm2
         trend_rows = (_adm2.table("sb_actuals_total_monthly")
@@ -4812,7 +4813,7 @@ def render_home_page(rows: list[dict]):
                 alert_emoji = {"critical":"🔴","warning":"🟡","upcoming":"🟠","plan":"🔵"}.get(r["alert"], "⚪")
                 attn.append({
                     "":        alert_emoji,
-                    "Producto":   (r.get("name") or r.get("asin"))[:45],
+                    "Product":    (r.get("name") or r.get("asin"))[:45],
                     "Order by":   r.get("order_by") or "—",
                     "Days":       r.get("days_to_order"),
                     "Qty":        r.get("reorder_qty"),
@@ -4821,9 +4822,9 @@ def render_home_page(rows: list[dict]):
                 df_attn = _pd.DataFrame(attn)
                 st.dataframe(df_attn, hide_index=True, use_container_width=True, height=240)
             else:
-                st.success("✅ Todo bajo control — ningún reorder urgente")
+                st.success("✅ All under control — no urgent reorders")
         except Exception as exc:
-            st.caption(f"Reorder alerts no disponibles: {exc}")
+            st.caption(f"Reorder alerts unavailable: {exc}")
 
     with cq:
         st.markdown("##### ⚡ Quick actions")
