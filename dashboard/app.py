@@ -745,14 +745,14 @@ def build_table_html(rows: list[dict], active_mps: list[str], active_alerts: lis
     ths = ""
     for label, width, right in COLS:
         align = "right" if right else "left"
-        color = "#C9A25A"
+        color = "#E8C879"
         sort_attr = SORTABLE.get(label, "")
         cursor = "cursor:pointer;user-select:none;" if sort_attr else ""
         onclick = f' onclick="sortTable(\'{sort_attr}\')"' if sort_attr else ""
         sort_indicator = f' <span id="si-{sort_attr}" style="font-size:9px;opacity:0.5"></span>' if sort_attr else ""
         ths += (f'<th{onclick} style="width:{width};min-width:{width};text-align:{align};'
-                f'color:{color};padding:10px 8px;font-size:10.5px;font-weight:600;'
-                f'text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;{cursor}">'
+                f'color:{color};padding:11px 8px;font-size:11.5px;font-weight:800;'
+                f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;{cursor}">'
                 f'{label}{sort_indicator}</th>')
 
     body = ""

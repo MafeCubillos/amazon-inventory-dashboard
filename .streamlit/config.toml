@@ -4,3 +4,10 @@ port = 8501
 
 [theme]
 base = "light"
+primaryColor = "#C9A25A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F0E8"
+textColor = "#111111"
+font = "sans serif"
+# data_editor / dataframe header styling (Streamlit >= 1.35)
+dataframeHeaderBackgroundColor = "#111111"
