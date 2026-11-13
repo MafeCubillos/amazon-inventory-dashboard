@@ -275,25 +275,16 @@ button[data-testid="baseButton-primary"]:hover {
     border-radius: 8px !important;
     font-weight: 600 !important;
 }
-/* Fix for expander label overlapping the arrow icon in some Streamlit builds */
-[data-testid="stExpander"] details > summary,
-[data-testid="stExpanderDetails"] > summary,
-details[data-testid="stExpanderDetails"] > summary {
-    display: flex !important;
-    align-items: center !important;
-    gap: 10px !important;
-    padding: 10px 14px !important;
+/* Hide Streamlit's Material Symbols icon on expander summaries — the font
+   ligature sometimes shows as raw text like "keyboard_arrow_right" which
+   overlaps the label. The native <details> disclosure triangle (▸/▾) stays. */
+[data-testid="stExpander"] summary span[data-testid="stIconMaterial"],
+[data-testid="stExpander"] summary [data-testid="stIcon"] {
+    display: none !important;
 }
-[data-testid="stExpander"] details > summary > span,
-[data-testid="stExpander"] details > summary p {
-    margin: 0 !important;
-    padding-left: 4px !important;
-    font-weight: 600 !important;
-    line-height: 1.4 !important;
-}
-[data-testid="stExpander"] details > summary svg {
-    flex-shrink: 0 !important;
-    margin-right: 6px !important;
+[data-testid="stExpander"] summary {
+    padding-left: 10px !important;
+    gap: 8px !important;
 }
 /* ── Topbar buttons row ─────── */
 .topbar-btn-row button {
