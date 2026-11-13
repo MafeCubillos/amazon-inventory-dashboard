@@ -197,7 +197,7 @@ section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
     font-weight: 600 !important;
     font-size: 13.5px !important;
     text-align: left !important;
-    padding: 9px 20px 9px 17px !important;
+    padding: 10px 20px 10px 26px !important;
     margin: 1px 0 !important;
     box-shadow: none !important;
     transition: background .15s ease !important;
@@ -223,7 +223,7 @@ section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
     font-weight: 500 !important;
     font-size: 13.5px !important;
     text-align: left !important;
-    padding: 9px 20px 9px 17px !important;
+    padding: 10px 20px 10px 26px !important;
     margin: 1px 0 !important;
     box-shadow: none !important;
     transition: background .15s ease, color .15s ease !important;
@@ -962,7 +962,7 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
         def _section(label: str):
             st.markdown(
                 f"""<div style='font-size:10px;color:#555;letter-spacing:.18em;
-                font-weight:700;padding:20px 20px 6px;text-transform:uppercase;
+                font-weight:700;padding:22px 26px 8px;text-transform:uppercase;
                 border-bottom:none'>
                 {label}
                 </div>""",
@@ -4776,6 +4776,7 @@ def render_home_page(rows: list[dict]):
     # ── 12-month trend charts ──────────────────────────────────
     st.markdown("##### 📈 Last 12 months")
     try:
+        import altair as _alt
         from backend.database import db_admin as _adm2
         trend_rows = (_adm2.table("sb_actuals_total_monthly")
                       .select("year_month,sales_eur,units,net_profit")
@@ -4783,21 +4784,51 @@ def render_home_page(rows: list[dict]):
         if trend_rows:
             df_trend = _pd.DataFrame(trend_rows[-12:])
             df_trend["margin_pct"] = (df_trend["net_profit"] / df_trend["sales_eur"] * 100).round(1)
-            df_trend = df_trend.set_index("year_month")
+            # Short month label: "Nov" (only year on Jan)
+            def _lbl(ym: str) -> str:
+                y, m = ym.split("-")
+                mon = ["Jan","Feb","Mar","Apr","May","Jun",
+                       "Jul","Aug","Sep","Oct","Nov","Dec"][int(m)-1]
+                return f"{mon}\n'{y[-2:]}" if m == "01" else mon
+            df_trend["mlabel"] = df_trend["year_month"].apply(_lbl)
+            df_trend["mlabel_sort"] = df_trend["year_month"]
+
+            def _make_chart(col: str, color: str, y_title: str, y_format: str = "~s") -> "_alt.Chart":
+                base = _alt.Chart(df_trend).properties(height=180)
+                line = base.mark_line(
+                    color=color, strokeWidth=2.5,
+                    point=_alt.OverlayMarkDef(filled=True, fill=color, size=55),
+                ).encode(
+                    x=_alt.X("mlabel:N", sort=list(df_trend["mlabel"]),
+                              axis=_alt.Axis(title=None, labelAngle=0, labelFontSize=12,
+                                              labelColor="#555", labelPadding=6,
+                                              ticks=False, domainColor="#ddd")),
+                    y=_alt.Y(f"{col}:Q",
+                              axis=_alt.Axis(title=y_title, titleFontSize=11, titleColor="#999",
+                                              labelFontSize=11, labelColor="#555",
+                                              format=y_format, grid=True,
+                                              gridColor="#eee", ticks=False, domain=False)),
+                    tooltip=[
+                        _alt.Tooltip("year_month:N", title="Month"),
+                        _alt.Tooltip(f"{col}:Q", title=y_title, format=",.0f"),
+                    ],
+                )
+                return line.configure_view(strokeWidth=0)
+
             tc1, tc2, tc3 = st.columns(3)
             with tc1:
-                st.caption("**Sales** €")
-                st.line_chart(df_trend["sales_eur"], height=160, use_container_width=True)
+                st.altair_chart(_make_chart("sales_eur", "#C9A25A", "Sales (€)", "~s"),
+                                use_container_width=True)
             with tc2:
-                st.caption("**Units sold**")
-                st.line_chart(df_trend["units"], height=160, use_container_width=True)
+                st.altair_chart(_make_chart("units", "#111111", "Units", ",.0f"),
+                                use_container_width=True)
             with tc3:
-                st.caption("**Net margin %**")
-                st.line_chart(df_trend["margin_pct"], height=160, use_container_width=True)
+                st.altair_chart(_make_chart("margin_pct", "#3B6D11", "Net margin %", ".1f"),
+                                use_container_width=True)
         else:
-            st.info("Aún no hay datos de Sellerboard — corre el sync primero.")
+            st.info("No Sellerboard data yet — run sync first.")
     except Exception as exc:
-        st.caption(f"Charts no disponibles: {exc}")
+        st.caption(f"Charts unavailable: {exc}")
 
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
