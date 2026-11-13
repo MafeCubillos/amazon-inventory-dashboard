@@ -2825,67 +2825,77 @@ def render_orders_page(inventory_rows: list[dict]):
                 })
 
             df_disp = pd.DataFrame(rows_disp)
-            edited  = st.data_editor(
+
+            # ── Nyvos HTML table (read-only, unified dark header) ──
+            _render_nyvos_df(
                 df_disp.drop(columns=["id"]),
-                column_config={
-                    "PO #":         st.column_config.TextColumn("PO #"),
-                    "Date":         st.column_config.DateColumn("Date"),
-                    "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
-                    "Product":      st.column_config.TextColumn("Product", width="large"),
-                    "Supplier":     st.column_config.TextColumn("Supplier"),
-                    "Units":        st.column_config.NumberColumn("Units", min_value=0),
-                    "Cost (€)":     st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
-                    "Est. arrival": st.column_config.DateColumn("Est. arrival"),
-                    "Status":       st.column_config.SelectboxColumn(
-                        "Status", options=list(STATUS_LABELS.keys()),
-                        required=True),
-                    "Notes":        st.column_config.TextColumn("Notes"),
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="po_editor",
-                num_rows="fixed",
+                widths={"PO #": "100px", "Product": "auto", "Status": "100px",
+                        "Date": "100px", "Est. arrival": "110px"},
+                aligns={"Status": "center"},
             )
 
-            action_c1, action_c2 = st.columns([1, 5])
-            with action_c2:
-                if st.button("🧹 Remove duplicates", key="dedupe_pos_btn",
-                             help="Delete duplicate POs (same PO# + same ASIN). Keeps the oldest one."):
-                    with st.spinner("Scanning for duplicates…"):
-                        try:
-                            kept, removed = _dedupe_pos()
-                        except Exception as e:
-                            st.error(f"Dedupe failed: {e}")
-                            removed = 0
-                            kept = len(pos)
-                    if removed > 0:
-                        st.success(f"Removed {removed} duplicate POs · {kept} remaining")
-                        load_master.clear()
+            with st.expander("✏️ Edit mode — update POs", expanded=False):
+                edited  = st.data_editor(
+                    df_disp.drop(columns=["id"]),
+                    column_config={
+                        "PO #":         st.column_config.TextColumn("PO #"),
+                        "Date":         st.column_config.DateColumn("Date"),
+                        "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
+                        "Product":      st.column_config.TextColumn("Product", width="large"),
+                        "Supplier":     st.column_config.TextColumn("Supplier"),
+                        "Units":        st.column_config.NumberColumn("Units", min_value=0),
+                        "Cost (€)":     st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
+                        "Est. arrival": st.column_config.DateColumn("Est. arrival"),
+                        "Status":       st.column_config.SelectboxColumn(
+                            "Status", options=list(STATUS_LABELS.keys()),
+                            required=True),
+                        "Notes":        st.column_config.TextColumn("Notes"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="po_editor",
+                    num_rows="fixed",
+                )
+
+                action_c1, action_c2 = st.columns([1, 5])
+                with action_c2:
+                    if st.button("🧹 Remove duplicates", key="dedupe_pos_btn",
+                                 help="Delete duplicate POs (same PO# + same ASIN). Keeps the oldest one."):
+                        with st.spinner("Scanning for duplicates…"):
+                            try:
+                                kept, removed = _dedupe_pos()
+                            except Exception as e:
+                                st.error(f"Dedupe failed: {e}")
+                                removed = 0
+                                kept = len(pos)
+                        if removed > 0:
+                            st.success(f"Removed {removed} duplicate POs · {kept} remaining")
+                            load_master.clear()
+                            st.rerun()
+                        else:
+                            st.info("No duplicates found.")
+
+                with action_c1:
+                    save_clicked = st.button("💾 Save changes", type="primary", key="save_po_edits")
+
+                if save_clicked:
+                    to_save = []
+                    for i, row in edited.iterrows():
+                        to_save.append({
+                            "id":           int(df_disp.iloc[i]["id"]),
+                            "po_number":    row["PO #"],
+                            "po_date":      str(row["Date"]) if row["Date"] else None,
+                            "product_name": row["Product"],
+                            "supplier":     row["Supplier"],
+                            "units_ordered": int(row["Units"]),
+                            "cost_eur":     float(row["Cost (€)"]),
+                            "est_arrival":  str(row["Est. arrival"]) if row["Est. arrival"] else None,
+                            "status":       row["Status"],
+                            "notes":        row["Notes"],
+                        })
+                    if _save_pos(to_save):
+                        st.success("Saved!")
                         st.rerun()
-                    else:
-                        st.info("No duplicates found.")
-
-            with action_c1:
-                save_clicked = st.button("💾 Save changes", type="primary", key="save_po_edits")
-
-            if save_clicked:
-                to_save = []
-                for i, row in edited.iterrows():
-                    to_save.append({
-                        "id":           int(df_disp.iloc[i]["id"]),
-                        "po_number":    row["PO #"],
-                        "po_date":      str(row["Date"]) if row["Date"] else None,
-                        "product_name": row["Product"],
-                        "supplier":     row["Supplier"],
-                        "units_ordered": int(row["Units"]),
-                        "cost_eur":     float(row["Cost (€)"]),
-                        "est_arrival":  str(row["Est. arrival"]) if row["Est. arrival"] else None,
-                        "status":       row["Status"],
-                        "notes":        row["Notes"],
-                    })
-                if _save_pos(to_save):
-                    st.success("Saved!")
-                    st.rerun()
 
     # ══ Tab 2: Add single order ════════════════════════════════
     with t_add:
@@ -3250,35 +3260,36 @@ def render_reorder_planner(rows: list[dict]):
                     "Stockout est.","Order by","Days to order","Alert","Reorder units"]
     df_show = pd.DataFrame(needs)[display_cols]
 
-    edited = st.data_editor(
+    # ── Nyvos HTML table (read-only, unified dark header) ──
+    _render_nyvos_df(
         df_show,
-        column_config={
-            "Product":       st.column_config.TextColumn("Product",       width="large", disabled=True),
-            "Source":        st.column_config.TextColumn("Source",        disabled=True),
-            "Stock (EU)":    st.column_config.NumberColumn("Stock (EU)",   disabled=True,
-                             help="Total FBA inventory across all EU marketplaces"),
-            "Inbound":       st.column_config.NumberColumn("Inbound",      disabled=True),
-            "On order 📦":   st.column_config.NumberColumn("On order 📦",  disabled=True,
-                             help="Units ordered from supplier (ordered+shipped POs)"),
-            "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True,
-                             help="Units at your warehouse already counted against this reorder"),
-            "🎵 TikTok":     st.column_config.NumberColumn("🎵 TikTok",     disabled=True,
-                             help="Units at TikTok fulfillment already counted against this reorder"),
-            "Vel/day (30d)": st.column_config.NumberColumn("Vel/day (30d)", format="%.1f", disabled=True,
-                             help="Last 30 days of actual sales ÷ 30 (EU total, sum across countries)"),
-            "Vel/day (3M)":  st.column_config.NumberColumn("Vel/day (3M)",  format="%.1f", disabled=True,
-                             help=("Forecast for next 3 months ÷ 90 (EU total). "
-                                   "When Source = 📈 Forecast, the planner's reorder math is based on this.")),
-            "Stockout est.": st.column_config.TextColumn("Stockout est.", disabled=True),
-            "Order by":      st.column_config.TextColumn("Order by",      disabled=True),
-            "Days to order": st.column_config.NumberColumn("Days to order", disabled=True),
-            "Alert":         st.column_config.TextColumn("Alert",         disabled=True),
-            "Reorder units": st.column_config.NumberColumn("✏️ Reorder units", min_value=0, step=10),
-        },
-        hide_index=True,
-        use_container_width=True,
-        key="reorder_editor",
+        widths={"Product": "auto", "Source": "90px", "Alert": "140px"},
+        aligns={"Alert": "left", "Source": "center"},
     )
+
+    with st.expander("✏️ Edit mode — adjust reorder quantities", expanded=False):
+        edited = st.data_editor(
+            df_show,
+            column_config={
+                "Product":       st.column_config.TextColumn("Product",       width="large", disabled=True),
+                "Source":        st.column_config.TextColumn("Source",        disabled=True),
+                "Stock (EU)":    st.column_config.NumberColumn("Stock (EU)",   disabled=True),
+                "Inbound":       st.column_config.NumberColumn("Inbound",      disabled=True),
+                "On order 📦":   st.column_config.NumberColumn("On order 📦",  disabled=True),
+                "🏠 Local":      st.column_config.NumberColumn("🏠 Local",      disabled=True),
+                "🎵 TikTok":     st.column_config.NumberColumn("🎵 TikTok",     disabled=True),
+                "Vel/day (30d)": st.column_config.NumberColumn("Vel/day (30d)", format="%.1f", disabled=True),
+                "Vel/day (3M)":  st.column_config.NumberColumn("Vel/day (3M)",  format="%.1f", disabled=True),
+                "Stockout est.": st.column_config.TextColumn("Stockout est.", disabled=True),
+                "Order by":      st.column_config.TextColumn("Order by",      disabled=True),
+                "Days to order": st.column_config.NumberColumn("Days to order", disabled=True),
+                "Alert":         st.column_config.TextColumn("Alert",         disabled=True),
+                "Reorder units": st.column_config.NumberColumn("✏️ Reorder units", min_value=0, step=10),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="reorder_editor",
+        )
 
     # ── Shipment plan Excel ─────────────────────────────────────
     ship_rows = []
@@ -3654,17 +3665,18 @@ def render_forecast_page(rows: list[dict]):
 
             month_cols = list(display.columns)
 
-            # Header cells — past months tinted green to mark "actuals"
+            # Header cells — Nyvos dark style; past months get green accent
             header_cells = ""
             for c in month_cols:
                 is_past = c in past_month_set
-                bg = "#E8F5D8" if is_past else "#F4F4F2"
-                color = "#3B6D11" if is_past else "#111"
+                bg = "#111111"
+                color = "#A8E063" if is_past else "#E8C879"
                 tag = " · actual" if is_past else ""
                 header_cells += (
-                    f'<th style="background:{bg};color:{color};font-weight:700;'
-                    f'font-size:12px;padding:9px 12px;text-align:right;'
-                    f'white-space:nowrap;border-bottom:2px solid #E0E0E0" '
+                    f'<th style="background:{bg};color:{color};font-weight:800;'
+                    f'font-size:11.5px;padding:11px 12px;text-align:right;'
+                    f'text-transform:uppercase;letter-spacing:0.08em;'
+                    f'white-space:nowrap;border-bottom:1px solid #000" '
                     f'title="Past month — actual sales{tag}">{c}</th>'
                 )
 
@@ -3677,7 +3689,7 @@ def render_forecast_page(rows: list[dict]):
                 row_col  = "#111"    if is_total else "#333"
                 border   = "border-top:2px solid #E0E0E0;" if is_total else ""
                 idx_cell = (
-                    f'<td style="background:#F4F4F2;font-weight:700;color:#111;'
+                    f'<td style="background:#F4F0E8;font-weight:700;color:#111;'
                     f'font-size:12px;padding:9px 12px;white-space:nowrap;'
                     f'border-right:1px solid #E0E0E0;{border}">{idx}</td>'
                 )
@@ -4309,17 +4321,25 @@ def render_forecast_builder_page(rows: list[dict]):
         unsafe_allow_html=True,
     )
 
-    # Column config: future months highlighted
-    col_cfg = {"País": st.column_config.TextColumn("País", width="small")}
+    # ── Nyvos HTML table (unified dark header) with future-months bolded ──
+    future_fmt = {}
     for ym in show_months:
         is_future = ym >= cur_ym
-        label = ("📊 " if is_future else "") + ym
-        col_cfg[ym] = st.column_config.NumberColumn(
-            label, format="%d",
-            help=("Proyección automática" if is_future else "Ventas reales"),
-        )
-
-    st.dataframe(df, column_config=col_cfg, hide_index=True, use_container_width=True)
+        if is_future:
+            # Highlight future months with light green background via custom formatter
+            future_fmt[ym] = (lambda v, _is=is_future: (
+                f'<span style="background:#EAF3DE;color:#3B6D11;font-weight:700;'
+                f'padding:2px 6px;border-radius:4px">{int(v):,}</span>' if v is not None else "—"
+            ))
+        else:
+            future_fmt[ym] = (lambda v: f"{int(v):,}" if v is not None else "—")
+    _render_nyvos_df(
+        df,
+        widths={"País": "70px"},
+        aligns={"País": "left"},
+        formatters=future_fmt,
+        max_height=320,
+    )
 
     # ── Summary metrics ────────────────────────────────────────
     hist_total  = sum(sum(payload["history"].values()) for payload in data.values())
