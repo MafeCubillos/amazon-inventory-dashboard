@@ -1964,6 +1964,46 @@ def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
         return False
 
 
+# ══════════════════════════════════════════════════════════════
+# Shared HTML table helper — unified Nyvos dark header style
+# ══════════════════════════════════════════════════════════════
+def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
+    """Render a read-only HTML table matching Amazon Inventory's header style.
+
+    columns: list of {"key": str, "label": str, "width": str, "align": str ("left"|"right"|"center")}
+    rows:    list of dicts keyed by `key`; values are already-formatted strings.
+    """
+    ths = ""
+    for c in columns:
+        ths += (
+            f'<th style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
+            f'color:#E8C879;padding:11px 10px;font-size:11.5px;font-weight:800;'
+            f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;'
+            f'background:#111111;position:sticky;top:0;z-index:10;'
+            f'box-shadow:0 1px 0 rgba(255,255,255,0.08)">'
+            f'{c["label"]}</th>'
+        )
+    body = ""
+    for i, r in enumerate(rows):
+        bg = "#FFFFFF" if i % 2 == 0 else "#FBFAF7"
+        tds = ""
+        for c in columns:
+            v = r.get(c["key"], "")
+            tds += (
+                f'<td style="padding:10px 10px;text-align:{c.get("align","left")};'
+                f'font-size:12.5px;color:#111;border-bottom:1px solid #EEE;'
+                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'{v}</td>'
+            )
+        body += f'<tr style="background:{bg}" onmouseover="this.style.background=\'#F5F5F0\'" onmouseout="this.style.background=\'{bg}\'">{tds}</tr>'
+    return (
+        f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
+        f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
+        f'<table style="width:100%;border-collapse:collapse;table-layout:auto;font-family:Inter,sans-serif">'
+        f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>'
+    )
+
+
 def render_local_stock_page(inventory_rows: list[dict]):
     """Local stock tracking — units at user's own warehouse (off-Amazon)."""
     # (page title now in topbar)
@@ -2029,40 +2069,72 @@ def render_local_stock_page(inventory_rows: list[dict]):
             })
         df_view = pd.DataFrame(rows_view)
 
-        edited = st.data_editor(
-            df_view,
-            column_config={
-                "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
-                "Product":      st.column_config.TextColumn("Product", disabled=True,
-                                                            width="large"),
-                "Local units":  st.column_config.NumberColumn(
-                                    "Local units", min_value=0, step=10,
-                                    help="Bottles at your warehouse for this ASIN."),
-                "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
-                "Notes":        st.column_config.TextColumn("Notes",
-                                    help="Optional — e.g. 'box #3 in basement'"),
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="local_stock_editor",
-            num_rows="fixed",
+        # ── Nyvos HTML table (read-only, unified dark header) ──
+        html_rows = []
+        for _, r in df_view.iterrows():
+            units_v = int(r["Local units"])
+            units_html = (
+                f'<span style="color:{"#111" if units_v > 0 else "#AAA"};'
+                f'font-weight:{"700" if units_v > 0 else "400"}">{units_v:,}</span>'
+            )
+            html_rows.append({
+                "ASIN":    f'<code style="background:#F4F0E8;padding:2px 6px;border-radius:4px;'
+                           f'font-size:11px;color:#111">{r["ASIN"]}</code>',
+                "Product": r["Product"],
+                "units":   units_html,
+                "updated": f'<span style="color:#888;font-size:11.5px">{r["Last updated"]}</span>',
+                "notes":   f'<span style="color:#666">{r["Notes"]}</span>',
+            })
+        st.markdown(
+            _nyvos_table_html(
+                columns=[
+                    {"key": "ASIN",    "label": "ASIN",         "width": "130px", "align": "left"},
+                    {"key": "Product", "label": "Product",      "width": "auto",  "align": "left"},
+                    {"key": "units",   "label": "Local Units",  "width": "120px", "align": "right"},
+                    {"key": "updated", "label": "Last Updated", "width": "120px", "align": "right"},
+                    {"key": "notes",   "label": "Notes",        "width": "200px", "align": "left"},
+                ],
+                rows=html_rows,
+            ),
+            unsafe_allow_html=True,
         )
 
-        if st.button("💾 Save changes", type="primary", key="save_local_stock"):
-            saved = 0
-            for i, row in edited.iterrows():
-                new_units = int(row["Local units"])
-                new_notes = str(row["Notes"] or "")
-                old_units = int(df_view.iloc[i]["Local units"])
-                old_notes = str(df_view.iloc[i]["Notes"] or "")
-                if new_units != old_units or new_notes != old_notes:
-                    if _save_local_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
-                        saved += 1
-            if saved > 0:
-                st.success(f"Updated {saved} ASIN(s)")
-                st.rerun()
-            else:
-                st.info("No changes to save.")
+        # ── Edit mode (inline editing) ─────────────────────────
+        with st.expander("✏️ Edit mode — update units & notes", expanded=False):
+            edited = st.data_editor(
+                df_view,
+                column_config={
+                    "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
+                    "Product":      st.column_config.TextColumn("Product", disabled=True,
+                                                                width="large"),
+                    "Local units":  st.column_config.NumberColumn(
+                                        "Local units", min_value=0, step=10,
+                                        help="Bottles at your warehouse for this ASIN."),
+                    "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
+                    "Notes":        st.column_config.TextColumn("Notes",
+                                        help="Optional — e.g. 'box #3 in basement'"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="local_stock_editor",
+                num_rows="fixed",
+            )
+
+            if st.button("💾 Save changes", type="primary", key="save_local_stock"):
+                saved = 0
+                for i, row in edited.iterrows():
+                    new_units = int(row["Local units"])
+                    new_notes = str(row["Notes"] or "")
+                    old_units = int(df_view.iloc[i]["Local units"])
+                    old_notes = str(df_view.iloc[i]["Notes"] or "")
+                    if new_units != old_units or new_notes != old_notes:
+                        if _save_local_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
+                            saved += 1
+                if saved > 0:
+                    st.success(f"Updated {saved} ASIN(s)")
+                    st.rerun()
+                else:
+                    st.info("No changes to save.")
 
     # ── Tab 2: Import CSV ─────────────────────────────────────
     with t_import:
@@ -2403,52 +2475,91 @@ def render_tiktok_page(inventory_rows: list[dict]):
             unsafe_allow_html=True,
         )
 
-        edited = st.data_editor(
-            df_view,
-            column_config={
-                "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
-                "Product":      st.column_config.TextColumn("Product", disabled=True, width="large"),
-                "TikTok units": st.column_config.NumberColumn(
-                                    "TikTok units", min_value=0, step=10,
-                                    help="Units at TikTok fulfillment / allocated to TikTok."),
-                "TT vel (30d real)": st.column_config.NumberColumn(
-                                    "TT vel (30d real)", format="%.2f", disabled=True,
-                                    help="Real units/day from TikTok Orders API (last 30 completed days). "
-                                         "Populated by daily sync. 0 = no orders in that window."),
-                "TT sold 30d":  st.column_config.NumberColumn(
-                                    "TT sold 30d", disabled=True,
-                                    help="Total units sold on TikTok in the last 30 days."),
-                "TT fc /day":   st.column_config.NumberColumn(
-                                    "TT fc /day", format="%.2f", disabled=True,
-                                    help="Current month TikTok forecast ÷ 30 (from Google Sheet TT column)."),
-                "Status":       st.column_config.TextColumn("●", disabled=True, width="small",
-                                    help="🔴 <14d critical | 🟡 <30d warning | 🟢 30d+ healthy | ⚫ no stock / no sales yet"),
-                "Days left":    st.column_config.TextColumn("Days left", disabled=True,
-                                    help="TikTok units ÷ real velocity (falls back to forecast if no orders yet)."),
-                "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
-                "Notes":        st.column_config.TextColumn("Notes"),
-            },
-            hide_index=True,
-            use_container_width=True,
-            key="tiktok_stock_editor",
-            num_rows="fixed",
+        # ── Nyvos HTML table (read-only, unified dark header) ──
+        html_rows = []
+        for _, r in df_view.iterrows():
+            units_v = int(r["TikTok units"])
+            units_html = (
+                f'<span style="color:{"#111" if units_v > 0 else "#AAA"};'
+                f'font-weight:{"700" if units_v > 0 else "400"}">{units_v:,}</span>'
+            )
+            status_v = r["Status"]
+            days_v   = r["Days left"]
+            days_col = {"🔴": "#C0392B", "🟡": "#B7791F", "🟢": "#2F855A"}.get(status_v, "#888")
+            html_rows.append({
+                "ASIN":    f'<code style="background:#F4F0E8;padding:2px 6px;border-radius:4px;'
+                           f'font-size:11px;color:#111">{r["ASIN"]}</code>',
+                "Product": r["Product"],
+                "units":   units_html,
+                "vreal":   f'{float(r["TT vel (30d real)"]):.2f}',
+                "sold30":  f'{int(r["TT sold 30d"]):,}',
+                "fcday":   f'{float(r["TT fc /day"]):.2f}',
+                "status":  f'<span style="font-size:14px">{status_v}</span>',
+                "days":    f'<span style="color:{days_col};font-weight:700">{days_v}</span>',
+                "updated": f'<span style="color:#888;font-size:11.5px">{r["Last updated"]}</span>',
+                "notes":   f'<span style="color:#666">{r["Notes"]}</span>',
+            })
+        st.markdown(
+            _nyvos_table_html(
+                columns=[
+                    {"key": "ASIN",    "label": "ASIN",           "width": "130px", "align": "left"},
+                    {"key": "Product", "label": "Product",        "width": "auto",  "align": "left"},
+                    {"key": "units",   "label": "TikTok Units",   "width": "110px", "align": "right"},
+                    {"key": "vreal",   "label": "Vel 30d Real",   "width": "100px", "align": "right"},
+                    {"key": "sold30",  "label": "Sold 30d",       "width": "90px",  "align": "right"},
+                    {"key": "fcday",   "label": "FC /day",        "width": "80px",  "align": "right"},
+                    {"key": "status",  "label": "●",              "width": "50px",  "align": "center"},
+                    {"key": "days",    "label": "Days Left",      "width": "100px", "align": "right"},
+                    {"key": "updated", "label": "Last Updated",   "width": "110px", "align": "right"},
+                    {"key": "notes",   "label": "Notes",          "width": "160px", "align": "left"},
+                ],
+                rows=html_rows,
+            ),
+            unsafe_allow_html=True,
         )
 
-        if st.button("💾 Save changes", type="primary", key="save_tiktok_stock"):
-            saved = 0
-            for i, row in edited.iterrows():
-                new_units = int(row["TikTok units"])
-                new_notes = str(row["Notes"] or "")
-                old_units = int(df_view.iloc[i]["TikTok units"])
-                old_notes = str(df_view.iloc[i]["Notes"] or "")
-                if new_units != old_units or new_notes != old_notes:
-                    if _save_tiktok_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
-                        saved += 1
-            if saved > 0:
-                st.success(f"Updated {saved} ASIN(s)")
-                st.rerun()
-            else:
-                st.info("No changes to save.")
+        # ── Edit mode (inline editing) ─────────────────────────
+        with st.expander("✏️ Edit mode — update TikTok units & notes", expanded=False):
+            edited = st.data_editor(
+                df_view,
+                column_config={
+                    "ASIN":         st.column_config.TextColumn("ASIN", disabled=True),
+                    "Product":      st.column_config.TextColumn("Product", disabled=True, width="large"),
+                    "TikTok units": st.column_config.NumberColumn(
+                                        "TikTok units", min_value=0, step=10,
+                                        help="Units at TikTok fulfillment / allocated to TikTok."),
+                    "TT vel (30d real)": st.column_config.NumberColumn(
+                                        "TT vel (30d real)", format="%.2f", disabled=True),
+                    "TT sold 30d":  st.column_config.NumberColumn(
+                                        "TT sold 30d", disabled=True),
+                    "TT fc /day":   st.column_config.NumberColumn(
+                                        "TT fc /day", format="%.2f", disabled=True),
+                    "Status":       st.column_config.TextColumn("●", disabled=True, width="small"),
+                    "Days left":    st.column_config.TextColumn("Days left", disabled=True),
+                    "Last updated": st.column_config.TextColumn("Last updated", disabled=True),
+                    "Notes":        st.column_config.TextColumn("Notes"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                key="tiktok_stock_editor",
+                num_rows="fixed",
+            )
+
+            if st.button("💾 Save changes", type="primary", key="save_tiktok_stock"):
+                saved = 0
+                for i, row in edited.iterrows():
+                    new_units = int(row["TikTok units"])
+                    new_notes = str(row["Notes"] or "")
+                    old_units = int(df_view.iloc[i]["TikTok units"])
+                    old_notes = str(df_view.iloc[i]["Notes"] or "")
+                    if new_units != old_units or new_notes != old_notes:
+                        if _save_tiktok_stock(df_view.iloc[i]["ASIN"], new_units, new_notes):
+                            saved += 1
+                if saved > 0:
+                    st.success(f"Updated {saved} ASIN(s)")
+                    st.rerun()
+                else:
+                    st.info("No changes to save.")
 
     # ── Tab 2: Import CSV ─────────────────────────────────────
     with t_import:
