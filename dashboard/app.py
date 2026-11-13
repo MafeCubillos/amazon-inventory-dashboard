@@ -299,13 +299,15 @@ button[data-testid="baseButton-primary"]:hover {
 [data-baseweb="tag"] button:hover svg {
     fill: #fff !important;
 }
-/* ── Data editor / dataframe headers — unified dark Nyvos style ── */
+/* ── Data editor / dataframe headers — unified dark Nyvos style ──
+   glide-data-grid reads these vars from :root / html, so we set them globally. */
+:root,
+html,
+body,
+.stApp,
+[data-testid="stAppViewContainer"],
 [data-testid="stDataFrame"],
-[data-testid="stDataEditor"],
-[data-testid="stDataFrame"] [data-testid="stDataFrameResizable"],
-[data-testid="stDataEditor"] [data-testid="stDataFrameResizable"],
-[data-testid="stDataFrame"] div[role="grid"],
-[data-testid="stDataEditor"] div[role="grid"] {
+[data-testid="stDataEditor"] {
     --gdg-header-bg: #111111 !important;
     --gdg-header-fg: #FFFFFF !important;
     --gdg-header-icon-fg: #FFFFFF !important;
@@ -319,6 +321,16 @@ button[data-testid="baseButton-primary"]:hover {
     --gdg-bg-header: #111111 !important;
     --gdg-bg-header-has-focus: #1A1A1A !important;
     --gdg-bg-header-hovered: #1A1A1A !important;
+    --gdg-text-group-header: #FFFFFF !important;
+    --gdg-bg-header-has-focus-text: #FFFFFF !important;
+}
+/* Fallback: style the stDataEditor top chrome if glide vars don't propagate.
+   Some Streamlit builds render column headers in a DOM layer above the canvas. */
+[data-testid="stDataEditor"] canvas + div,
+[data-testid="stDataEditor"] [class*="header"],
+[data-testid="stDataEditorResizable"] [class*="gdg-header"] {
+    background: #111111 !important;
+    color: #FFFFFF !important;
 }
 </style>
 """, unsafe_allow_html=True)
