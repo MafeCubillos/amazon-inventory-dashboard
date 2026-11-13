@@ -299,16 +299,26 @@ button[data-testid="baseButton-primary"]:hover {
 [data-baseweb="tag"] button:hover svg {
     fill: #fff !important;
 }
-/* ── Data editor / dataframe headers — dark like Overview HTML table ── */
+/* ── Data editor / dataframe headers — unified dark Nyvos style ── */
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"],
 [data-testid="stDataFrame"] [data-testid="stDataFrameResizable"],
-[data-testid="stDataFrame"] {
-    --gdg-header-bg: #111111;
-    --gdg-header-fg: #FFFFFF;
-    --gdg-header-icon-fg: #FFFFFF;
-    --gdg-accent-color: #C9A25A;
-    --gdg-header-bottom-border-color: #111111;
-    --gdg-horizontal-border-color: #E8E8E8;
-    --gdg-vertical-border-color: #E8E8E8;
+[data-testid="stDataEditor"] [data-testid="stDataFrameResizable"],
+[data-testid="stDataFrame"] div[role="grid"],
+[data-testid="stDataEditor"] div[role="grid"] {
+    --gdg-header-bg: #111111 !important;
+    --gdg-header-fg: #FFFFFF !important;
+    --gdg-header-icon-fg: #FFFFFF !important;
+    --gdg-accent-color: #C9A25A !important;
+    --gdg-accent-light: rgba(201, 162, 90, 0.15) !important;
+    --gdg-header-bottom-border-color: #111111 !important;
+    --gdg-horizontal-border-color: #E8E8E8 !important;
+    --gdg-vertical-border-color: #E8E8E8 !important;
+    --gdg-text-header: #FFFFFF !important;
+    --gdg-text-header-selected: #FFFFFF !important;
+    --gdg-bg-header: #111111 !important;
+    --gdg-bg-header-has-focus: #1A1A1A !important;
+    --gdg-bg-header-hovered: #1A1A1A !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -5451,9 +5461,32 @@ PAGE_META = {
 }
 _icon, _title, _subtitle = PAGE_META.get(_CURRENT_PAGE, ("", "Nyvos", ""))
 
+# ── Compute "last sync" from sync_log table ──────────────────
+_last_sync_label = "never"
+_last_sync_fresh = False   # green vs amber vs red dot
+try:
+    from backend.database import db_admin as _adm_hdr
+    _sl = (_adm_hdr.table("sync_log").select("ended_at,status")
+           .order("ended_at", desc=True).limit(1).execute().data or [])
+    if _sl:
+        from datetime import datetime as _dt_hdr, timezone as _tz_hdr
+        _ts = _sl[0].get("ended_at")
+        if _ts:
+            _end = _dt_hdr.fromisoformat(_ts.replace("Z", "+00:00"))
+            _now = _dt_hdr.now(_tz_hdr.utc)
+            _delta = (_now - _end).total_seconds()
+            if   _delta < 60:       _last_sync_label = "just now"
+            elif _delta < 3600:     _last_sync_label = f"{int(_delta/60)}m ago"
+            elif _delta < 86400:    _last_sync_label = f"{int(_delta/3600)}h ago"
+            else:                   _last_sync_label = f"{int(_delta/86400)}d ago"
+            _last_sync_fresh = _delta < 86400 * 2
+except Exception:
+    pass
+_dot_color = "#4CAF50" if _last_sync_fresh else "#C9A25A"
+
 # ── Topbar (dynamic per page) ──────────────────────────────────
 st.markdown(f"""
-<div style="background:#111;padding:16px 28px;border-radius:10px;margin-bottom:8px;
+<div style="background:#111;padding:16px 28px;border-radius:10px;margin-bottom:12px;
             display:flex;align-items:center;justify-content:space-between">
   <div style="display:flex;align-items:center;gap:20px">
     {LOGO_IMG}
@@ -5471,15 +5504,24 @@ st.markdown(f"""
       </div>
     </div>
   </div>
-  <div style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:8px">
+  <div style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:10px">
     <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
-                 background:#4CAF50"></span>
-    Last sync: 2h ago
+                 background:{_dot_color}"></span>
+    <span style="color:#888;letter-spacing:.04em">Last sync</span>
+    <span style="color:#fff;font-weight:600">{_last_sync_label}</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-_, c_log, c_sync = st.columns([9, 1, 1])
+_tb1, _, c_log, c_sync = st.columns([6, 3, 1, 1])
+with _tb1:
+    st.markdown(
+        "<div style='color:#888;font-size:12px;padding-top:6px'>"
+        f"<span style='color:#C9A25A;font-weight:700;letter-spacing:.14em'>"
+        "QUICK ACTIONS ›</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 with c_log:
     if st.button("🕐 Log", key="open_sync", help="View sync history"):
         sync_dialog()
