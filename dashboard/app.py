@@ -299,38 +299,12 @@ button[data-testid="baseButton-primary"]:hover {
 [data-baseweb="tag"] button:hover svg {
     fill: #fff !important;
 }
-/* ── Data editor / dataframe headers — unified dark Nyvos style ──
-   glide-data-grid reads these vars from :root / html, so we set them globally. */
-:root,
-html,
-body,
-.stApp,
-[data-testid="stAppViewContainer"],
-[data-testid="stDataFrame"],
-[data-testid="stDataEditor"] {
-    --gdg-header-bg: #111111 !important;
-    --gdg-header-fg: #FFFFFF !important;
-    --gdg-header-icon-fg: #FFFFFF !important;
+/* ── Data editor / dataframe — keep default header (canvas-rendered, can't be CSS'd reliably).
+   Amazon Inventory uses HTML table for the dark Nyvos header. ── */
+[data-testid="stDataEditor"],
+[data-testid="stDataFrame"] {
     --gdg-accent-color: #C9A25A !important;
     --gdg-accent-light: rgba(201, 162, 90, 0.15) !important;
-    --gdg-header-bottom-border-color: #111111 !important;
-    --gdg-horizontal-border-color: #E8E8E8 !important;
-    --gdg-vertical-border-color: #E8E8E8 !important;
-    --gdg-text-header: #FFFFFF !important;
-    --gdg-text-header-selected: #FFFFFF !important;
-    --gdg-bg-header: #111111 !important;
-    --gdg-bg-header-has-focus: #1A1A1A !important;
-    --gdg-bg-header-hovered: #1A1A1A !important;
-    --gdg-text-group-header: #FFFFFF !important;
-    --gdg-bg-header-has-focus-text: #FFFFFF !important;
-}
-/* Fallback: style the stDataEditor top chrome if glide vars don't propagate.
-   Some Streamlit builds render column headers in a DOM layer above the canvas. */
-[data-testid="stDataEditor"] canvas + div,
-[data-testid="stDataEditor"] [class*="header"],
-[data-testid="stDataEditorResizable"] [class*="gdg-header"] {
-    background: #111111 !important;
-    color: #FFFFFF !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -5478,11 +5452,11 @@ _last_sync_label = "never"
 _last_sync_fresh = False   # green vs amber vs red dot
 try:
     from backend.database import db_admin as _adm_hdr
-    _sl = (_adm_hdr.table("sync_log").select("ended_at,status")
-           .order("ended_at", desc=True).limit(1).execute().data or [])
+    _sl = (_adm_hdr.table("sync_log").select("synced_at,status")
+           .order("synced_at", desc=True).limit(1).execute().data or [])
     if _sl:
         from datetime import datetime as _dt_hdr, timezone as _tz_hdr
-        _ts = _sl[0].get("ended_at")
+        _ts = _sl[0].get("synced_at")
         if _ts:
             _end = _dt_hdr.fromisoformat(_ts.replace("Z", "+00:00"))
             _now = _dt_hdr.now(_tz_hdr.utc)
