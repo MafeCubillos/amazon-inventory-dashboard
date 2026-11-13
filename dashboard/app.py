@@ -1522,7 +1522,7 @@ def render_labels_page(inventory_rows: list[dict]):
     """Label inventory page — edit current units inline; system handles the rest."""
     from datetime import date as _date
 
-    st.markdown("#### 🏷️ Label Inventory")
+    # (page title now in topbar)
     st.caption(
         "You maintain **one number per ASIN** — labels physically at your warehouse "
         "right now. The system deducts every **open PO** (draft + ordered + shipped, "
@@ -1970,7 +1970,7 @@ def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
 
 def render_local_stock_page(inventory_rows: list[dict]):
     """Local stock tracking — units at user's own warehouse (off-Amazon)."""
-    st.markdown("#### 🏠 Local Stock")
+    # (page title now in topbar)
     st.caption(
         "Bottles you have physically at **your own warehouse / home**, separate "
         "from Amazon FBA. Each ASIN is one editable number. The Reorder Planner "
@@ -2154,7 +2154,7 @@ def _save_tiktok_stock(asin: str, units: int, notes: str = "") -> bool:
 
 def render_tiktok_page(inventory_rows: list[dict]):
     """TikTok inventory tracking — manual until API access is approved."""
-    st.markdown("#### 🎵 TikTok Inventory")
+    # (page title now in topbar)
     st.caption(
         "Bottles at TikTok fulfillment / your TikTok-allocated stock. Manually maintained "
         "until the TikTok Shop API is wired up (in approval). The **forecast** for TikTok "
@@ -2492,7 +2492,7 @@ def render_orders_page(inventory_rows: list[dict]):
     from datetime import date as _date
     import io as _io
 
-    st.markdown("#### 📋 Purchase Orders")
+    # (page title now in topbar)
 
     if DEMO_MODE:
         st.info("Connect Supabase to manage purchase orders.", icon="🧪")
@@ -3265,7 +3265,7 @@ def render_forecast_page(rows: list[dict]):
     import calendar
     from datetime import date
 
-    st.markdown("#### 📈 Forecast")
+    # (page title now in topbar)
 
     # ── Check credentials ──────────────────────────────────────
     gkey = os.getenv("GOOGLE_API_KEY", "").strip()
@@ -3837,7 +3837,7 @@ def render_forecast_page(rows: list[dict]):
 # ══════════════════════════════════════════════════════════════
 
 def render_forecast_builder_page(rows: list[dict]):
-    st.markdown("#### 📊 Forecast Builder")
+    # (page title now in topbar)
     st.caption(
         "Proyecciones automáticas basadas en ventas reales (sales_velocity + "
         "tiktok_velocity). **Modelo**: promedio últimos 3 meses × (1 + growth%)^N "
@@ -4136,7 +4136,7 @@ def render_pnl_builder_page(rows: list[dict]):
     except Exception:
         pass   # fall back to original rows
 
-    st.markdown("#### 💶 P&L Builder")
+    # (page title now in topbar)
     st.caption(
         "Inputs editables por scenario (Bear / Base / Bull) para construir el P&L proyectado. "
         "Precios y costos son **constantes por producto** con override mensual opcional. "
@@ -4552,7 +4552,7 @@ def render_pnl_view_page(rows: list[dict]):
     from backend.pnl_view import compute_pnl
     from backend.pnl_assumptions import SCENARIOS, get_active_scenario
 
-    st.markdown("#### 📊 P&L View (actuals + projected)")
+    # (page title now in topbar)
     st.caption(
         "Vista consolidada. Columnas = meses. "
         "**Meses pasados** (de Sellerboard, histórico real) · "
@@ -5542,7 +5542,7 @@ if page == "home":
 
 # ════════ PAGE: INVENTORY ════════
 elif page == "inventory":
-    st.markdown("#### 📦 Inventory", unsafe_allow_html=False)
+    # (page title now in topbar)
     fc1, fc2, fc3, fc4, fc5 = st.columns([3, 3, 2, 2, 2])
     with fc1:
         new_mp = st.multiselect("Marketplaces", MARKETPLACES,
@@ -5597,7 +5597,7 @@ elif page == "inventory":
 
 # ════════ PAGE: REORDER ════════
 elif page == "reorder":
-    st.markdown("#### 🚚 Reorder Planner", unsafe_allow_html=False)
+    # (page title now in topbar)
     render_reorder_planner(rows)
 
 # ════════ PAGE: ORDERS ════════
