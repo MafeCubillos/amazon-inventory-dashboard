@@ -204,6 +204,14 @@ section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
     background: rgba(201, 162, 90, 0.14) !important;
 }
+/* Force LEFT align inside the button regardless of inner span */
+section[data-testid="stSidebar"] button > div,
+section[data-testid="stSidebar"] button p {
+    justify-content: flex-start !important;
+    text-align: left !important;
+    width: 100% !important;
+    margin: 0 !important;
+}
 /* ── Sidebar nav — inactive button ─── */
 section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
     background: transparent !important;
@@ -989,7 +997,12 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
         _nav("📊", "P&L View",         "pnl_view")
         _nav("💰", "TikTok Finance",   "finance")
 
-        _section(" ")   # spacer
+        # Spacer + divider before Settings
+        st.markdown(
+            "<div style='height:18px;margin-top:8px;"
+            "border-top:1px solid #222'></div>",
+            unsafe_allow_html=True,
+        )
         _nav("⚙️", "Settings", "settings")
 
         mode_text = "🧪 Demo mode" if DEMO_MODE else "🟢 Live"
@@ -4652,9 +4665,10 @@ def render_pnl_view_page(rows: list[dict]):
 
 def render_home_page(rows: list[dict]):
     import pandas as _pd
-    from datetime import date as _date, timedelta as _td
+    from datetime import date as _date, datetime as _dt, timedelta as _td
 
     today = _date.today()
+    now_hour = _dt.now().hour
     cur_ym = today.strftime("%Y-%m")
 
     # ── Hero header (Nyvos brand style) ────────────────────────
@@ -4665,7 +4679,7 @@ def render_home_page(rows: list[dict]):
     NYVOS · OPERATIONS
   </div>
   <div style="font-size:30px;font-weight:800;letter-spacing:-.02em">
-    Good {('morning' if today.hour<12 else 'afternoon' if today.hour<19 else 'evening')}, Mafe
+    Good {('morning' if now_hour<12 else 'afternoon' if now_hour<19 else 'evening')}, Mafe
   </div>
   <div style="font-size:14px;color:#aaa;margin-top:4px">
     {today.strftime('%A, %d %b %Y')} · estado del negocio en un vistazo
