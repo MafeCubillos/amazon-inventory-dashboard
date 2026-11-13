@@ -961,10 +961,12 @@ section[data-testid="stSidebar"] button[kind="secondary"] div[data-testid="stMar
 
         def _section(label: str):
             st.markdown(
-                f"""<div style='font-size:10px;color:#555;letter-spacing:.18em;
-                font-weight:700;padding:22px 26px 8px;text-transform:uppercase;
-                border-bottom:none'>
-                {label}
+                f"""<div style='margin:20px 16px 4px;padding:6px 10px 6px 10px;
+                     border-top:1px solid #1E1E1E;position:relative'>
+                  <div style='font-size:10.5px;color:#C9A25A;letter-spacing:.22em;
+                       font-weight:800;text-transform:uppercase;padding-top:10px'>
+                    {label}
+                  </div>
                 </div>""",
                 unsafe_allow_html=True,
             )
