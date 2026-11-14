@@ -23,6 +23,7 @@ from backend.google_oauth import (
 )
 from backend.google_services import create_gmail_draft, upload_po_to_drive
 from backend.po_auto_draft import scan_and_create_drafts, send_draft_alert_email
+from dashboard.nyvos_ui import render_nyvos_df
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -78,8 +79,11 @@ def _render_list():
         "Estado":      p["status"],
         "id":          p["id"],
     } for p in pos])
-    st.dataframe(df.drop(columns=["id"]), use_container_width=True,
-                 hide_index=True)
+    render_nyvos_df(
+        df.drop(columns=["id"]),
+        widths={"PO #": "90px", "Fecha": "100px", "Estado": "90px", "Factura": "120px"},
+        aligns={"Estado": "center"},
+    )
 
     st.markdown("##### 🔎 Ver / descargar PDF")
     choices = {f"PO #{p['po_number']} — {p.get('supplier_name','—')} ({p['po_date']})": p["id"]
@@ -119,12 +123,16 @@ def _render_po_detail(po: dict):
         st.error("Falta `reportlab`. Añade `reportlab>=4.0` a requirements.txt.")
 
     with st.expander("Items"):
-        st.dataframe(pd.DataFrame([{
-            "Descripción": it["description"],
-            "Cant":        it["quantity"],
-            "Precio Und":  it["unit_price"],
-            "Precio total": it.get("line_total"),
-        } for it in items]), use_container_width=True, hide_index=True)
+        render_nyvos_df(
+            pd.DataFrame([{
+                "Descripción":  it["description"],
+                "Cant":         it["quantity"],
+                "Precio Und":   it["unit_price"],
+                "Precio total": it.get("line_total"),
+            } for it in items]),
+            widths={"Descripción": "auto", "Cant": "90px",
+                    "Precio Und": "120px", "Precio total": "130px"},
+        )
 
     # ── Google integration buttons (Drive + Gmail) ───────────────
     if is_connected():
@@ -337,7 +345,12 @@ def _render_products():
                                        if len(p["description"]) > 80
                                        else p["description"]).replace("\n", " · "),
         } for p in products])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        render_nyvos_df(
+            df,
+            widths={"Nombre": "200px", "Proveedor": "150px", "MOQ": "80px",
+                    "Precio": "90px", "Activo": "70px", "Descripción (resumen)": "auto"},
+            aligns={"Activo": "center"},
+        )
 
     with st.expander("➕ Añadir o editar producto"):
         _PROD_KEYS = ("prod_name", "prod_desc", "prod_drive", "prod_price",
@@ -456,7 +469,12 @@ def _render_suppliers():
             "Web":       s.get("web") or "",
             "Dirección": (s.get("address_lines") or "").replace("\n", " · "),
         } for s in suppliers])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        render_nyvos_df(
+            df,
+            widths={"ID": "60px", "Nombre": "180px", "NIF": "120px",
+                    "Teléfono": "120px", "Email": "180px",
+                    "Web": "140px", "Dirección": "auto"},
+        )
 
     with st.expander("➕ Añadir o editar proveedor"):
         # Reset field state when the dropdown switches so edits of one

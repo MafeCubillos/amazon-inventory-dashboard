@@ -1799,66 +1799,77 @@ def render_labels_page(inventory_rows: list[dict]):
                     "Notes":         lo.get("notes") or "",
                 })
             df_lo = pd.DataFrame(rows_lo)
-            edited_lo = st.data_editor(
+
+            # ── Nyvos HTML table (read-only, unified dark header) ──
+            _render_nyvos_df(
                 df_lo.drop(columns=["id"]),
-                column_config={
-                    "ASIN":          st.column_config.TextColumn("ASIN", disabled=True),
-                    "Product":       st.column_config.TextColumn("Product", disabled=True,
-                                                                 width="large"),
-                    "Units":         st.column_config.NumberColumn("Units", min_value=0),
-                    "Order date":    st.column_config.DateColumn("Order date"),
-                    "Est. arrival":  st.column_config.DateColumn("Est. arrival"),
-                    "Received date": st.column_config.DateColumn("Received date"),
-                    "Status":        st.column_config.SelectboxColumn(
-                                         "Status",
-                                         options=["pending", "received", "cancelled"]),
-                    "Supplier":      st.column_config.TextColumn("Supplier"),
-                    "Cost (€)":      st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
-                    "Notes":         st.column_config.TextColumn("Notes"),
-                },
-                hide_index=True,
-                use_container_width=True,
-                key="lo_editor",
-                num_rows="fixed",
+                widths={"ASIN": "110px", "Product": "auto", "Status": "100px",
+                        "Order date": "100px", "Est. arrival": "100px",
+                        "Received date": "110px"},
+                aligns={"Status": "center"},
             )
 
-            ec1, ec2 = st.columns(2)
-            with ec1:
-                if st.button("💾 Save edits", type="primary", key="save_lo_btn"):
-                    saved = 0
-                    for i, row in edited_lo.iterrows():
-                        payload = {
-                            "id":            int(df_lo.iloc[i]["id"]),
-                            "asin":          df_lo.iloc[i]["ASIN"],
-                            "units":         int(row["Units"]),
-                            "order_date":    (row["Order date"].isoformat()
-                                              if row["Order date"] else None),
-                            "est_arrival":   (row["Est. arrival"].isoformat()
-                                              if row["Est. arrival"] else None),
-                            "received_date": (row["Received date"].isoformat()
-                                              if row["Received date"] else None),
-                            "status":        row["Status"],
-                            "supplier":      row["Supplier"] or None,
-                            "cost_eur":      float(row["Cost (€)"]) if row["Cost (€)"] else None,
-                            "notes":         row["Notes"] or None,
-                        }
-                        if _save_label_order(payload):
-                            saved += 1
-                    st.success(f"Saved {saved} order(s)")
-                    st.rerun()
-            with ec2:
-                del_id = st.selectbox(
-                    "Delete (by id)",
-                    options=[None] + [int(lo["id"]) for lo in label_orders],
-                    format_func=lambda x: "—" if x is None else (
-                        f"#{x} · {next((lo['asin'] for lo in label_orders if int(lo['id'])==x), '?')}"
-                    ),
-                    key="del_lo_pick",
+            with st.expander("✏️ Edit mode — update label orders", expanded=False):
+                edited_lo = st.data_editor(
+                    df_lo.drop(columns=["id"]),
+                    column_config={
+                        "ASIN":          st.column_config.TextColumn("ASIN", disabled=True),
+                        "Product":       st.column_config.TextColumn("Product", disabled=True,
+                                                                     width="large"),
+                        "Units":         st.column_config.NumberColumn("Units", min_value=0),
+                        "Order date":    st.column_config.DateColumn("Order date"),
+                        "Est. arrival":  st.column_config.DateColumn("Est. arrival"),
+                        "Received date": st.column_config.DateColumn("Received date"),
+                        "Status":        st.column_config.SelectboxColumn(
+                                             "Status",
+                                             options=["pending", "received", "cancelled"]),
+                        "Supplier":      st.column_config.TextColumn("Supplier"),
+                        "Cost (€)":      st.column_config.NumberColumn("Cost (€)", format="€%.2f"),
+                        "Notes":         st.column_config.TextColumn("Notes"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="lo_editor",
+                    num_rows="fixed",
                 )
-                if del_id and st.button("🗑️ Delete", key="del_lo_btn"):
-                    if _delete_label_order(del_id):
-                        st.success(f"Deleted order #{del_id}")
+
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    if st.button("💾 Save edits", type="primary", key="save_lo_btn"):
+                        saved = 0
+                        for i, row in edited_lo.iterrows():
+                            payload = {
+                                "id":            int(df_lo.iloc[i]["id"]),
+                                "asin":          df_lo.iloc[i]["ASIN"],
+                                "units":         int(row["Units"]),
+                                "order_date":    (row["Order date"].isoformat()
+                                                  if row["Order date"] else None),
+                                "est_arrival":   (row["Est. arrival"].isoformat()
+                                                  if row["Est. arrival"] else None),
+                                "received_date": (row["Received date"].isoformat()
+                                                  if row["Received date"] else None),
+                                "status":        row["Status"],
+                                "supplier":      row["Supplier"] or None,
+                                "cost_eur":      float(row["Cost (€)"]) if row["Cost (€)"] else None,
+                                "notes":         row["Notes"] or None,
+                            }
+                            if _save_label_order(payload):
+                                saved += 1
+                        st.success(f"Saved {saved} order(s)")
                         st.rerun()
+                with ec2:
+                    del_id = st.selectbox(
+                        "Delete (by id)",
+                        options=[None] + [int(lo["id"]) for lo in label_orders],
+                        format_func=lambda x: "—" if x is None else (
+                            f"#{x} · {next((lo['asin'] for lo in label_orders if int(lo['id'])==x), '?')}"
+                        ),
+                        key="del_lo_pick",
+                    )
+                    if del_id and st.button("🗑️ Delete", key="del_lo_btn"):
+                        if _delete_label_order(del_id):
+                            st.success(f"Deleted order #{del_id}")
+                            st.rerun()
 
     # ── Tab: Per-ASIN walkthrough ─────────────────────────────
     with t_walk:
@@ -1976,6 +1987,11 @@ def _save_local_stock(asin: str, units: int, notes: str = "") -> bool:
 # Shared HTML table helper — unified Nyvos dark header style
 # ══════════════════════════════════════════════════════════════
 _NYVOS_TBL_COUNTER = {"n": 0}
+
+# Shared helper (used by purchase_orders_page.py too)
+from dashboard.nyvos_ui import render_nyvos_df as _render_nyvos_df_shared
+from dashboard.nyvos_ui import nyvos_table_html as _nyvos_table_html_shared
+
 
 def _render_nyvos_df(df: "pd.DataFrame", widths: dict | None = None,
                      aligns: dict | None = None, formatters: dict | None = None,
@@ -4322,17 +4338,28 @@ def render_forecast_builder_page(rows: list[dict]):
     )
 
     # ── Nyvos HTML table (unified dark header) with future-months bolded ──
+    def _safe_int(v):
+        try:
+            if v is None:
+                return None
+            fv = float(v)
+            if fv != fv:  # NaN check
+                return None
+            return int(fv)
+        except Exception:
+            return None
+
     future_fmt = {}
     for ym in show_months:
         is_future = ym >= cur_ym
         if is_future:
-            # Highlight future months with light green background via custom formatter
-            future_fmt[ym] = (lambda v, _is=is_future: (
+            future_fmt[ym] = (lambda v: (
                 f'<span style="background:#EAF3DE;color:#3B6D11;font-weight:700;'
-                f'padding:2px 6px;border-radius:4px">{int(v):,}</span>' if v is not None else "—"
+                f'padding:2px 6px;border-radius:4px">{_safe_int(v):,}</span>'
+                if _safe_int(v) is not None else "—"
             ))
         else:
-            future_fmt[ym] = (lambda v: f"{int(v):,}" if v is not None else "—")
+            future_fmt[ym] = (lambda v: f"{_safe_int(v):,}" if _safe_int(v) is not None else "—")
     _render_nyvos_df(
         df,
         widths={"País": "70px"},
