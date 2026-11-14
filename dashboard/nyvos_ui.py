@@ -50,17 +50,24 @@ def nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
     ths = ""
     for i, c in enumerate(columns):
         stype = c.get("sort_type", "num" if c.get("align") == "right" else "text")
-        sticky = _sticky_style(i, is_header=True, bg="#111111")
-        # Headers need to combine sticky-top (header) AND sticky-left (if column is sticky)
-        pos_rule = "position:sticky;top:0;" if i not in sticky_offsets else sticky
+        # Headers need BOTH sticky-top AND sticky-left (for columns marked sticky)
+        if i in sticky_offsets:
+            pos_rule = (f"position:sticky;top:0;left:{sticky_offsets[i]};"
+                        f"z-index:20;")
+            extra_shadow = ("box-shadow:2px 0 4px -2px rgba(0,0,0,0.25),"
+                            "0 1px 0 rgba(255,255,255,0.08);"
+                            if i == max(sticky_offsets.keys()) else
+                            "box-shadow:0 1px 0 rgba(255,255,255,0.08);")
+        else:
+            pos_rule = "position:sticky;top:0;z-index:10;"
+            extra_shadow = "box-shadow:0 1px 0 rgba(255,255,255,0.08);"
         ths += (
             f'<th onclick="nyvosSort_{tid}({i},\'{stype}\')" '
             f'style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
             f'color:#E8C879;padding:11px 10px;font-size:11.5px;font-weight:800;'
             f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;'
-            f'background:#111111;{pos_rule}z-index:{15 if i in sticky_offsets else 10};'
-            f'cursor:pointer;user-select:none;'
-            f'box-shadow:0 1px 0 rgba(255,255,255,0.08)">'
+            f'background:#111111;{pos_rule}'
+            f'cursor:pointer;user-select:none;{extra_shadow}">'
             f'{c["label"]} <span id="{tid}_si_{i}" style="font-size:9px;opacity:0.5">⇅</span></th>'
         )
 
@@ -139,7 +146,8 @@ function nyvosSort_{tid}(colIdx, kind) {{
         sort_js +
         f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
         f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
-        f'<table id="{tid}" style="width:100%;border-collapse:collapse;table-layout:auto;font-family:Inter,sans-serif">'
+        f'<table id="{tid}" style="width:100%;border-collapse:separate;border-spacing:0;'
+        f'table-layout:auto;font-family:Inter,sans-serif">'
         f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>'
     )
 
