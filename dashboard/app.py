@@ -5077,28 +5077,27 @@ def render_home_page(rows: list[dict]):
         if trend_rows:
             df_trend = _pd.DataFrame(trend_rows[-12:])
             df_trend["margin_pct"] = (df_trend["net_profit"] / df_trend["sales_eur"] * 100).round(1)
-            # Short month label: "Nov" (only year on Jan)
+            # Format: "MM/YY" (e.g. 09/26) — every month, rotated 90° vertical
             def _lbl(ym: str) -> str:
                 y, m = ym.split("-")
-                mon = ["Jan","Feb","Mar","Apr","May","Jun",
-                       "Jul","Aug","Sep","Oct","Nov","Dec"][int(m)-1]
-                return f"{mon}\n'{y[-2:]}" if m == "01" else mon
+                return f"{m}/{y[-2:]}"
             df_trend["mlabel"] = df_trend["year_month"].apply(_lbl)
             df_trend["mlabel_sort"] = df_trend["year_month"]
 
             def _make_chart(col: str, color: str, y_title: str, y_format: str = "~s") -> "_alt.Chart":
-                base = _alt.Chart(df_trend).properties(height=180)
+                base = _alt.Chart(df_trend).properties(height=200)
                 line = base.mark_line(
                     color=color, strokeWidth=2.5,
-                    point=_alt.OverlayMarkDef(filled=True, fill=color, size=55),
+                    point=_alt.OverlayMarkDef(filled=True, fill=color, size=50),
                 ).encode(
                     x=_alt.X("mlabel:N", sort=list(df_trend["mlabel"]),
-                              axis=_alt.Axis(title=None, labelAngle=0, labelFontSize=12,
-                                              labelColor="#555", labelPadding=6,
+                              axis=_alt.Axis(title=None, labelAngle=-90, labelFontSize=9,
+                                              labelColor="#555", labelPadding=4,
+                                              labelOverlap=False, labelSeparation=0,
                                               ticks=False, domainColor="#ddd")),
                     y=_alt.Y(f"{col}:Q",
-                              axis=_alt.Axis(title=y_title, titleFontSize=11, titleColor="#999",
-                                              labelFontSize=11, labelColor="#555",
+                              axis=_alt.Axis(title=y_title, titleFontSize=10, titleColor="#999",
+                                              labelFontSize=9, labelColor="#555",
                                               format=y_format, grid=True,
                                               gridColor="#eee", ticks=False, domain=False)),
                     tooltip=[
