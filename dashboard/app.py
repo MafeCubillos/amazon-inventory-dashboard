@@ -1995,16 +1995,21 @@ from dashboard.nyvos_ui import nyvos_table_html as _nyvos_table_html_shared
 
 def _render_nyvos_df(df: "pd.DataFrame", widths: dict | None = None,
                      aligns: dict | None = None, formatters: dict | None = None,
+                     sticky: list | None = None,
                      max_height: int = 620) -> None:
     """Render a DataFrame as a Nyvos sortable HTML table (dark header, gold text).
 
     widths:     {col_name: css_width}
     aligns:     {col_name: "left"|"right"|"center"} — defaults: right for numeric, left for text
     formatters: {col_name: callable(val) -> str}  for cell formatting
+    sticky:     list of column names to freeze to the left when scrolling horizontally.
+                Auto-detects ["ASIN", "Product"] if present and sticky is None.
     """
     widths = widths or {}
     aligns = aligns or {}
     formatters = formatters or {}
+    if sticky is None:
+        sticky = [c for c in ("ASIN", "Product") if c in df.columns]
     numeric_cols = set(df.select_dtypes(include="number").columns)
 
     columns = []
@@ -2016,6 +2021,7 @@ def _render_nyvos_df(df: "pd.DataFrame", widths: dict | None = None,
             "width": widths.get(c, "auto"),
             "align": align,
             "sort_type": "num" if c in numeric_cols else "text",
+            "sticky":    c in sticky,
         })
 
     rows = []

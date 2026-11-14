@@ -23,15 +23,42 @@ def nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
     _TBL_COUNTER["n"] += 1
     tid = f"nyvos_tbl_{_TBL_COUNTER['n']}"
 
+    # Compute cumulative left offsets for sticky columns (so a 2nd sticky
+    # column sits right after the 1st without overlapping).
+    sticky_offsets: dict[int, str] = {}
+    cur_left = 0
+    for i, c in enumerate(columns):
+        if c.get("sticky"):
+            sticky_offsets[i] = f"{cur_left}px"
+            # Parse width ("130px" → 130), default 150 if auto/unknown
+            w = c.get("width", "150px")
+            try:
+                cur_left += int(str(w).replace("px", "").strip())
+            except Exception:
+                cur_left += 150
+
+    def _sticky_style(i: int, is_header: bool, bg: str) -> str:
+        if i not in sticky_offsets:
+            return ""
+        z = 12 if is_header else 5
+        shadow = ("box-shadow:2px 0 4px -2px rgba(0,0,0,0.15),"
+                  "0 1px 0 rgba(255,255,255,0.08);"
+                  if i == max(sticky_offsets.keys()) else "")
+        return (f"position:sticky;left:{sticky_offsets[i]};z-index:{z};"
+                f"background:{bg} !important;{shadow}")
+
     ths = ""
     for i, c in enumerate(columns):
         stype = c.get("sort_type", "num" if c.get("align") == "right" else "text")
+        sticky = _sticky_style(i, is_header=True, bg="#111111")
+        # Headers need to combine sticky-top (header) AND sticky-left (if column is sticky)
+        pos_rule = "position:sticky;top:0;" if i not in sticky_offsets else sticky
         ths += (
             f'<th onclick="nyvosSort_{tid}({i},\'{stype}\')" '
             f'style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
             f'color:#E8C879;padding:11px 10px;font-size:11.5px;font-weight:800;'
             f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;'
-            f'background:#111111;position:sticky;top:0;z-index:10;'
+            f'background:#111111;{pos_rule}z-index:{15 if i in sticky_offsets else 10};'
             f'cursor:pointer;user-select:none;'
             f'box-shadow:0 1px 0 rgba(255,255,255,0.08)">'
             f'{c["label"]} <span id="{tid}_si_{i}" style="font-size:9px;opacity:0.5">⇅</span></th>'
@@ -41,22 +68,31 @@ def nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
     for i, r in enumerate(rows):
         bg = "#FFFFFF" if i % 2 == 0 else "#FBFAF7"
         tds = ""
-        for c in columns:
+        for j, c in enumerate(columns):
             v = r.get(c["key"], "")
             sv = r.get(c["key"] + "__sort", "")
             data_attr = f' data-sort="{sv}"' if sv != "" else ""
+            sticky = _sticky_style(j, is_header=False, bg=bg)
             tds += (
-                f'<td{data_attr} style="padding:10px 10px;text-align:{c.get("align","left")};'
+                f'<td{data_attr} class="nyvos-cell" '
+                f'style="padding:10px 10px;text-align:{c.get("align","left")};'
                 f'font-size:12.5px;color:#111;border-bottom:1px solid #EEE;'
-                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+                f'background:{bg};{sticky}">'
                 f'{v}</td>'
             )
-        body += (f'<tr style="background:{bg}" '
-                 f'onmouseover="this.style.background=\'#F5F5F0\'" '
-                 f'onmouseout="this.style.background=\'{bg}\'">{tds}</tr>')
+        body += (f'<tr data-bg="{bg}" style="background:{bg}" '
+                 f'onmouseover="nyvosHoverRow(this, \'#F5F5F0\')" '
+                 f'onmouseout="nyvosHoverRow(this, this.dataset.bg)">{tds}</tr>')
 
     sort_js = f"""
 <script>
+function nyvosHoverRow(tr, color) {{
+    // Hover every td in the row (sticky cells override row bg, so we must set each)
+    for (var k = 0; k < tr.cells.length; k++) {{
+        tr.cells[k].style.background = color;
+    }}
+}}
 window.nyvosSort_{tid}_dir = window.nyvosSort_{tid}_dir || {{}};
 function nyvosSort_{tid}(colIdx, kind) {{
     var tbl = document.getElementById('{tid}');
@@ -81,8 +117,11 @@ function nyvosSort_{tid}(colIdx, kind) {{
     rows.forEach(function(r, i) {{
         var bg = i % 2 === 0 ? '#FFFFFF' : '#FBFAF7';
         r.style.background = bg;
-        r.setAttribute('onmouseover', "this.style.background='#F5F5F0'");
-        r.setAttribute('onmouseout', "this.style.background='" + bg + "'");
+        r.dataset.bg = bg;
+        // Re-apply bg on each cell (sticky cells need it explicitly)
+        for (var k = 0; k < r.cells.length; k++) {{
+            r.cells[k].style.background = bg;
+        }}
         tbody.appendChild(r);
     }});
     var ths = tbl.tHead.rows[0].cells;
@@ -107,11 +146,18 @@ function nyvosSort_{tid}(colIdx, kind) {{
 
 def render_nyvos_df(df: pd.DataFrame, widths: dict | None = None,
                     aligns: dict | None = None, formatters: dict | None = None,
+                    sticky: list | None = None,
                     max_height: int = 620) -> None:
-    """Render a DataFrame as a sortable Nyvos HTML table."""
+    """Render a DataFrame as a sortable Nyvos HTML table.
+
+    sticky: list of column names to freeze to the left on horizontal scroll.
+            Auto-detects ["ASIN", "Product"] if present and sticky is None.
+    """
     widths = widths or {}
     aligns = aligns or {}
     formatters = formatters or {}
+    if sticky is None:
+        sticky = [c for c in ("ASIN", "Product") if c in df.columns]
     numeric_cols = set(df.select_dtypes(include="number").columns)
 
     columns = []
@@ -123,6 +169,7 @@ def render_nyvos_df(df: pd.DataFrame, widths: dict | None = None,
             "width": widths.get(c, "auto"),
             "align": align,
             "sort_type": "num" if c in numeric_cols else "text",
+            "sticky":    c in sticky,
         })
 
     def _safe_num(v):
