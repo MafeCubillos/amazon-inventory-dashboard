@@ -649,28 +649,47 @@ def trend_html(t: str) -> str:
             "flat": '<span style="color:#999;font-size:15px">→</span>'}.get(t, "")
 
 
-_STATUS_COLOR = {"critical": "#E24B4A", "warning": "#BA7517", "ok": "#639922"}
+# ── Unified Nyvos status palette ───────────────────────────────
+# One source of truth for critical/warning/ok across the app: dots,
+# text colors, pills, and summary cards all read from here.
+NYVOS_STATUS = {
+    "critical": {
+        "text":   "#A32D2D",
+        "dot":    "#E24B4A",
+        "bg":     "#FDECEC",
+        "border": "#F0BABA",
+        "label":  "Critical",
+    },
+    "warning": {
+        "text":   "#854F0B",
+        "dot":    "#F5A623",
+        "bg":     "#FEF3C7",
+        "border": "#FCD34D",
+        "label":  "Warning",
+    },
+    "ok": {
+        "text":   "#2E6B13",
+        "dot":    "#5CB82E",
+        "bg":     "#EAF3DE",
+        "border": "#C8E0A5",
+        "label":  "Healthy",
+    },
+}
+_STATUS_COLOR = {k: v["dot"] for k, v in NYVOS_STATUS.items()}
 
 
 def days_style(d, status: str | None = None) -> str:
-    """Text color for a days-left value.
-
-    If a `status` is given (critical / warning / ok), use the matching status
-    color so the number matches the alert dot. Otherwise fall back to the
-    absolute thresholds from Settings (days_red / days_amber). This keeps
-    per-country rows visually consistent with their alert dot.
-    """
-    if status in _STATUS_COLOR:
-        return f"color:{_STATUS_COLOR[status]};font-weight:700"
+    if status in NYVOS_STATUS:
+        return f"color:{NYVOS_STATUS[status]['dot']};font-weight:700"
     try:
         v = float(d)
     except (TypeError, ValueError):
         return "color:#999"
     red_thr   = st.session_state.get("days_red",   30)
     amber_thr = st.session_state.get("days_amber", 60)
-    if v < red_thr:   return "color:#E24B4A;font-weight:700"
-    if v < amber_thr: return "color:#BA7517;font-weight:700"
-    return "color:#639922;font-weight:700"
+    if v < red_thr:   return f"color:{NYVOS_STATUS['critical']['dot']};font-weight:700"
+    if v < amber_thr: return f"color:{NYVOS_STATUS['warning']['dot']};font-weight:700"
+    return f"color:{NYVOS_STATUS['ok']['dot']};font-weight:700"
 
 
 def fmt_days(d) -> str:
@@ -682,18 +701,58 @@ def fmt_days(d) -> str:
 
 
 def status_dot(s: str) -> str:
-    c = {"critical": "#E24B4A", "warning": "#F5A623", "ok": "#4CAF50"}.get(s, "#999")
+    c = NYVOS_STATUS.get(s, {}).get("dot", "#999")
     return f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{c}"></span>'
+
+
+def status_pill(s: str, label: str | None = None) -> str:
+    """Unified pill: colored dot + status label, same shape everywhere."""
+    cfg = NYVOS_STATUS.get(s, {"text":"#666","dot":"#999","bg":"#EEE","label":s})
+    text = label or cfg.get("label", s.title())
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:6px;'
+        f'padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;'
+        f'background:{cfg["bg"]};color:{cfg["text"]};letter-spacing:.02em">'
+        f'<span style="width:7px;height:7px;border-radius:50%;background:{cfg["dot"]}"></span>'
+        f'{text}</span>'
+    )
+
+
+def status_summary_cards(counts: dict, subs: dict | None = None) -> str:
+    """3-card Critical / Warning / Healthy summary strip (unified look).
+
+    counts: {"critical": int, "warning": int, "ok": int}
+    subs:   optional {status: subtitle_text}
+    """
+    subs = subs or {}
+    parts = []
+    for s in ("critical", "warning", "ok"):
+        cfg = NYVOS_STATUS[s]
+        n   = counts.get(s, 0)
+        bg  = cfg["bg"] if n > 0 else "#F4F4F2"
+        bd  = cfg["border"] if n > 0 else "#E0E0E0"
+        tx  = cfg["text"] if n > 0 else "#666"
+        parts.append(
+            f'<div style="background:{bg};border:1px solid {bd};border-radius:10px;padding:16px 18px">'
+            f'<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">'
+            f'<span style="width:9px;height:9px;border-radius:50%;background:{cfg["dot"]}"></span>'
+            f'<span style="font-size:11px;color:{tx};font-weight:700;text-transform:uppercase;letter-spacing:.06em">{cfg["label"]}</span>'
+            f'</div>'
+            f'<div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n}</div>'
+            f'<div style="font-size:12px;color:#666;margin-top:4px">{subs.get(s, "")}</div>'
+            f'</div>'
+        )
+    return (f'<div style="display:grid;grid-template-columns:repeat(3,1fr);'
+            f'gap:12px;margin:6px 0 16px 0">{"".join(parts)}</div>')
 
 
 def mp_status_dots(countries: list[dict]) -> str:
     """4 mini dots in ES/FR/DE/IT order — one per marketplace with tooltip."""
     mp_status = {c["mp"]: c["status"] for c in countries}
-    COLOR = {"critical": "#E24B4A", "warning": "#F5A623", "ok": "#4CAF50"}
     parts = []
     for mp in MARKETPLACES:
         st  = mp_status.get(mp, "ok")
-        col = COLOR.get(st, "#999")
+        col = NYVOS_STATUS.get(st, {}).get("dot", "#999")
         parts.append(
             f'<span title="{FLAGS[mp]} {mp}: {st}" '
             f'style="display:inline-block;width:8px;height:8px;border-radius:50%;'
@@ -1053,9 +1112,9 @@ def render_mp_cards(rows: list[dict]):
   <div style="font-size:13px;color:#555;font-weight:600;margin-bottom:3px">€{s['value']:,.0f} stock value</div>
   <div style="font-size:12px;color:#888;margin-bottom:12px">{s['sales30d']:,} units sold 30d</div>
   <div style="display:flex;gap:5px;flex-wrap:wrap">
-    <span style="padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#FCEBEB;color:#A32D2D">{s['critical']} critical</span>
-    <span style="padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#FAEEDA;color:#854F0B">{s['warning']} warning</span>
-    <span style="padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#EAF3DE;color:#3B6D11">{s['ok']} ok</span>
+    {status_pill("critical", f"{s['critical']} critical")}
+    {status_pill("warning",  f"{s['warning']} warning")}
+    {status_pill("ok",       f"{s['ok']} ok")}
   </div>
 </div>"""
     html += "</div>"
@@ -2449,29 +2508,19 @@ def render_tiktok_page(inventory_rows: list[dict]):
             })
         df_view = pd.DataFrame(rows_view)
 
-        # Alert summary strip — same look & palette as Overview's header cards
+        # Alert summary strip — unified Nyvos status palette
         n_red    = int((df_view["Status"] == "🔴").sum())
         n_yellow = int((df_view["Status"] == "🟡").sum())
         n_green  = int((df_view["Status"] == "🟢").sum())
         st.markdown(
-            f"""
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:6px 0 16px 0">
-  <div style="background:{'#FCEBEB' if n_red>0 else '#F4F4F2'};border:1px solid {'#F0BABA' if n_red>0 else '#E0E0E0'};border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:{'#A32D2D' if n_red>0 else '#666'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🔴 Critical</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_red}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">under 14 days of stock</div>
-  </div>
-  <div style="background:{'#FEF3C7' if n_yellow>0 else '#F4F4F2'};border:1px solid {'#FCD34D' if n_yellow>0 else '#E0E0E0'};border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:{'#92400E' if n_yellow>0 else '#666'};font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🟡 Warning</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_yellow}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">under 30 days of stock</div>
-  </div>
-  <div style="background:#EAF3DE;border:1px solid #C8E0A5;border-radius:10px;padding:16px 18px">
-    <div style="font-size:11px;color:#3B6D11;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">🟢 Healthy</div>
-    <div style="font-size:26px;font-weight:800;color:#111;line-height:1">{n_green}</div>
-    <div style="font-size:12px;color:#666;margin-top:4px">30+ days runway</div>
-  </div>
-</div>""",
+            status_summary_cards(
+                counts={"critical": n_red, "warning": n_yellow, "ok": n_green},
+                subs={
+                    "critical": "under 14 days of stock",
+                    "warning":  "under 30 days of stock",
+                    "ok":       "30+ days runway",
+                },
+            ),
             unsafe_allow_html=True,
         )
 
