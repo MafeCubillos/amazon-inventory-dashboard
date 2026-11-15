@@ -4956,7 +4956,7 @@ def render_pnl_view_page(rows: list[dict]):
 
     _render_nyvos_df_shared(
         df_view, widths=widths, aligns=aligns, formatters=formatters,
-        sticky=["Línea"], max_height=900,
+        sticky=["Línea"], max_height=1200,
     )
 
     # Summary KPIs

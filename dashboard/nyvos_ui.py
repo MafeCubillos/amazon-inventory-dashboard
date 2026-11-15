@@ -13,7 +13,8 @@ import streamlit.components.v1 as components
 _TBL_COUNTER = {"n": 0}
 
 
-def nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
+def nyvos_table_html(columns: list[dict], rows: list[dict],
+                     max_height: int = 620) -> str:
     """Build sortable HTML table with Nyvos dark header (black bg + gold text).
 
     columns: list of {"key": str, "label": str, "width": str, "align": str, "sort_type": str}
@@ -146,7 +147,7 @@ function nyvosSort_{tid}(colIdx, kind) {{
 
     return (
         sort_js +
-        f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
+        f'<div style="overflow:auto;max-height:{max_height}px;border-radius:10px;'
         f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
         f'<table id="{tid}" style="width:100%;min-width:100%;border-collapse:separate;border-spacing:0;'
         f'table-layout:auto;font-family:Inter,sans-serif">'
@@ -217,8 +218,10 @@ def render_nyvos_df(df: pd.DataFrame, widths: dict | None = None,
                     row_d[c + "__sort"] = str(n)
         rows.append(row_d)
 
+    content_h = 90 + 38 * max(1, len(rows))
+    iframe_h  = min(max_height, content_h)
     components.html(
-        nyvos_table_html(columns=columns, rows=rows),
-        height=min(max_height, 90 + 38 * max(1, len(rows))),
+        nyvos_table_html(columns=columns, rows=rows, max_height=iframe_h),
+        height=iframe_h,
         scrolling=True,
     )
