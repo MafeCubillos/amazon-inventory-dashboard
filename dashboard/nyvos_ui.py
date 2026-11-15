@@ -146,7 +146,7 @@ function nyvosSort_{tid}(colIdx, kind) {{
         sort_js +
         f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
         f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
-        f'<table id="{tid}" style="width:100%;border-collapse:separate;border-spacing:0;'
+        f'<table id="{tid}" style="width:100%;min-width:100%;border-collapse:separate;border-spacing:0;'
         f'table-layout:auto;font-family:Inter,sans-serif">'
         f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>'
     )
