@@ -2706,8 +2706,10 @@ def render_orders_page(inventory_rows: list[dict]):
             # ── Nyvos HTML table (read-only, unified dark header) ──
             _render_nyvos_df(
                 df_disp.drop(columns=["id"]),
-                widths={"PO #": "100px", "Product": "auto", "Status": "100px",
-                        "Date": "100px", "Est. arrival": "110px"},
+                widths={"PO #": "80px", "Date": "100px", "ASIN": "120px",
+                        "Product": "260px", "Supplier": "140px",
+                        "Est. arrival": "110px", "Status": "100px",
+                        "Notes": "auto"},
                 aligns={"Status": "center"},
             )
 
