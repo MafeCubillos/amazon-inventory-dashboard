@@ -1531,12 +1531,13 @@ def render_labels_page(inventory_rows: list[dict]):
     from datetime import date as _date
 
     # (page title now in topbar)
-    st.caption(
-        "You maintain **one number per ASIN** — labels physically at your warehouse "
-        "right now. The system deducts every **open PO** (draft + ordered + shipped, "
-        "anything not yet received) and warns when you'll run short, using your label "
-        "lead time to compute the deadline (PO date − lead time)."
-    )
+    with st.expander("ℹ️ How this page works", expanded=False):
+        st.markdown(
+            "You maintain **one number per ASIN** — labels physically at your warehouse "
+            "right now. The system deducts every **open PO** (draft + ordered + shipped, "
+            "anything not yet received) and warns when you'll run short, using your label "
+            "lead time to compute the deadline (PO date − lead time)."
+        )
 
     if DEMO_MODE:
         st.info("Connect Supabase to manage label inventory.", icon="🧪")
@@ -2003,11 +2004,12 @@ _nyvos_table_html = _nyvos_table_html_shared
 def render_local_stock_page(inventory_rows: list[dict]):
     """Local stock tracking — units at user's own warehouse (off-Amazon)."""
     # (page title now in topbar)
-    st.caption(
-        "Bottles you have physically at **your own warehouse / home**, separate "
-        "from Amazon FBA. Each ASIN is one editable number. The Reorder Planner "
-        "automatically subtracts this from what you need to order from your supplier."
-    )
+    with st.expander("ℹ️ How this page works", expanded=False):
+        st.markdown(
+            "Bottles you have physically at **your own warehouse / home**, separate "
+            "from Amazon FBA. Each ASIN is one editable number. The Reorder Planner "
+            "automatically subtracts this from what you need to order from your supplier."
+        )
 
     if DEMO_MODE:
         st.info("Connect Supabase to manage local stock.", icon="🧪")
@@ -2220,12 +2222,13 @@ def _save_tiktok_stock(asin: str, units: int, notes: str = "") -> bool:
 def render_tiktok_page(inventory_rows: list[dict]):
     """TikTok inventory tracking — manual until API access is approved."""
     # (page title now in topbar)
-    st.caption(
-        "Bottles at TikTok fulfillment / your TikTok-allocated stock. Manually maintained "
-        "until the TikTok Shop API is wired up (in approval). The **forecast** for TikTok "
-        "comes from the `TT` column in your Google Sheet — add it there and it flows into "
-        "the Reorder Planner automatically."
-    )
+    with st.expander("ℹ️ How this page works", expanded=False):
+        st.markdown(
+            "Bottles at TikTok fulfillment / your TikTok-allocated stock. Manually maintained "
+            "until the TikTok Shop API is wired up (in approval). The **forecast** for TikTok "
+            "comes from the `TT` column in your Google Sheet — add it there and it flows into "
+            "the Reorder Planner automatically."
+        )
 
     if DEMO_MODE:
         st.info("Connect Supabase to manage TikTok inventory.", icon="🧪")
