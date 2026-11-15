@@ -80,9 +80,11 @@ def nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
             sv = r.get(c["key"] + "__sort", "")
             data_attr = f' data-sort="{sv}"' if sv != "" else ""
             sticky = _sticky_style(j, is_header=False, bg=bg)
+            w = c.get("width", "auto")
+            width_rule = f"width:{w};max-width:{w};" if w and w != "auto" else ""
             tds += (
                 f'<td{data_attr} class="nyvos-cell" '
-                f'style="padding:10px 10px;text-align:{c.get("align","left")};'
+                f'style="{width_rule}padding:10px 10px;text-align:{c.get("align","left")};'
                 f'font-size:12.5px;color:#111;border-bottom:1px solid #EEE;'
                 f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
                 f'background:{bg};{sticky}">'
