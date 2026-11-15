@@ -1993,156 +1993,10 @@ from dashboard.nyvos_ui import render_nyvos_df as _render_nyvos_df_shared
 from dashboard.nyvos_ui import nyvos_table_html as _nyvos_table_html_shared
 
 
-def _render_nyvos_df(df: "pd.DataFrame", widths: dict | None = None,
-                     aligns: dict | None = None, formatters: dict | None = None,
-                     sticky: list | None = None,
-                     max_height: int = 620) -> None:
-    """Render a DataFrame as a Nyvos sortable HTML table (dark header, gold text).
-
-    widths:     {col_name: css_width}
-    aligns:     {col_name: "left"|"right"|"center"} — defaults: right for numeric, left for text
-    formatters: {col_name: callable(val) -> str}  for cell formatting
-    sticky:     list of column names to freeze to the left when scrolling horizontally.
-                Auto-detects ["ASIN", "Product"] if present and sticky is None.
-    """
-    widths = widths or {}
-    aligns = aligns or {}
-    formatters = formatters or {}
-    if sticky is None:
-        sticky = [c for c in ("ASIN", "Product") if c in df.columns]
-    numeric_cols = set(df.select_dtypes(include="number").columns)
-
-    columns = []
-    for c in df.columns:
-        align = aligns.get(c, "right" if c in numeric_cols else "left")
-        columns.append({
-            "key":   c,
-            "label": str(c),
-            "width": widths.get(c, "auto"),
-            "align": align,
-            "sort_type": "num" if c in numeric_cols else "text",
-            "sticky":    c in sticky,
-        })
-
-    rows = []
-    for _, r in df.iterrows():
-        row_d = {}
-        for c in df.columns:
-            raw = r[c]
-            if c in formatters:
-                val = formatters[c](raw)
-            elif c in numeric_cols:
-                try:
-                    if float(raw) == int(float(raw)):
-                        val = f"{int(float(raw)):,}"
-                    else:
-                        val = f"{float(raw):,.2f}"
-                except Exception:
-                    val = str(raw) if raw is not None else ""
-            else:
-                val = "" if raw is None else str(raw)
-            row_d[c] = val
-            if c in numeric_cols:
-                try:
-                    row_d[c + "__sort"] = str(float(raw))
-                except Exception:
-                    pass
-        rows.append(row_d)
-
-    components.html(
-        _nyvos_table_html(columns=columns, rows=rows),
-        height=min(max_height, 90 + 38 * len(rows)),
-        scrolling=True,
-    )
-
-
-def _nyvos_table_html(columns: list[dict], rows: list[dict]) -> str:
-    """Render a sortable HTML table matching Amazon Inventory's header style.
-
-    columns: list of {"key": str, "label": str, "width": str, "align": str, "sort_type": "num"|"text"}
-    rows:    list of dicts keyed by `key`; values are already-formatted strings (HTML allowed).
-             For numeric sorting, pass a data-sort attribute via the "sort_val" key in rows
-             (otherwise text content is parsed with parseFloat).
-    """
-    _NYVOS_TBL_COUNTER["n"] += 1
-    tid = f"nyvos_tbl_{_NYVOS_TBL_COUNTER['n']}"
-
-    ths = ""
-    for i, c in enumerate(columns):
-        stype = c.get("sort_type", "num" if c.get("align") == "right" else "text")
-        ths += (
-            f'<th onclick="nyvosSort_{tid}({i},\'{stype}\')" '
-            f'style="width:{c.get("width","auto")};text-align:{c.get("align","left")};'
-            f'color:#E8C879;padding:11px 10px;font-size:11.5px;font-weight:800;'
-            f'text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;'
-            f'background:#111111;position:sticky;top:0;z-index:10;'
-            f'cursor:pointer;user-select:none;'
-            f'box-shadow:0 1px 0 rgba(255,255,255,0.08)">'
-            f'{c["label"]} <span id="{tid}_si_{i}" style="font-size:9px;opacity:0.5">⇅</span></th>'
-        )
-    body = ""
-    for i, r in enumerate(rows):
-        bg = "#FFFFFF" if i % 2 == 0 else "#FBFAF7"
-        tds = ""
-        for c in columns:
-            v = r.get(c["key"], "")
-            sv = r.get(c["key"] + "__sort", "")
-            data_attr = f' data-sort="{sv}"' if sv != "" else ""
-            tds += (
-                f'<td{data_attr} style="padding:10px 10px;text-align:{c.get("align","left")};'
-                f'font-size:12.5px;color:#111;border-bottom:1px solid #EEE;'
-                f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-                f'{v}</td>'
-            )
-        body += f'<tr style="background:{bg}" onmouseover="this.style.background=\'#F5F5F0\'" onmouseout="this.style.background=\'{bg}\'">{tds}</tr>'
-
-    sort_js = f"""
-<script>
-window.nyvosSort_{tid}_dir = window.nyvosSort_{tid}_dir || {{}};
-function nyvosSort_{tid}(colIdx, kind) {{
-    var tbl = document.getElementById('{tid}');
-    if (!tbl) return;
-    var tbody = tbl.tBodies[0];
-    var rows = Array.from(tbody.rows);
-    var prev = window.nyvosSort_{tid}_dir[colIdx] || 0;
-    var dir = prev === 1 ? -1 : 1;
-    window.nyvosSort_{tid}_dir = {{}};
-    window.nyvosSort_{tid}_dir[colIdx] = dir;
-    rows.sort(function(a, b) {{
-        var ca = a.cells[colIdx], cb = b.cells[colIdx];
-        var va = ca.dataset.sort !== undefined ? ca.dataset.sort : ca.innerText.trim();
-        var vb = cb.dataset.sort !== undefined ? cb.dataset.sort : cb.innerText.trim();
-        if (kind === 'num') {{
-            var na = parseFloat(String(va).replace(/[^0-9.\\-]/g,'')) || 0;
-            var nb = parseFloat(String(vb).replace(/[^0-9.\\-]/g,'')) || 0;
-            return (na - nb) * dir;
-        }}
-        return va.localeCompare(vb) * dir;
-    }});
-    rows.forEach(function(r, i) {{
-        var bg = i % 2 === 0 ? '#FFFFFF' : '#FBFAF7';
-        r.style.background = bg;
-        r.setAttribute('onmouseover', "this.style.background='#F5F5F0'");
-        r.setAttribute('onmouseout', "this.style.background='" + bg + "'");
-        tbody.appendChild(r);
-    }});
-    // Update indicators
-    var ths = tbl.tHead.rows[0].cells;
-    for (var k = 0; k < ths.length; k++) {{
-        var si = document.getElementById('{tid}_si_' + k);
-        if (si) si.innerText = (k === colIdx) ? (dir === 1 ? '▲' : '▼') : '⇅';
-        if (si) si.style.opacity = (k === colIdx) ? '1' : '0.5';
-    }}
-}}
-</script>"""
-
-    return (
-        sort_js +
-        f'<div style="overflow:auto;max-height:620px;border-radius:10px;'
-        f'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:12px">'
-        f'<table id="{tid}" style="width:100%;border-collapse:collapse;table-layout:auto;font-family:Inter,sans-serif">'
-        f'<thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table></div>'
-    )
+# Delegate to the shared Nyvos UI helpers so sticky columns + border-collapse:separate
+# fix (commit 8e0b062) applies to every page that uses these.
+_render_nyvos_df = _render_nyvos_df_shared
+_nyvos_table_html = _nyvos_table_html_shared
 
 
 def render_local_stock_page(inventory_rows: list[dict]):
@@ -2229,8 +2083,8 @@ def render_local_stock_page(inventory_rows: list[dict]):
         components.html(
             _nyvos_table_html(
                 columns=[
-                    {"key": "ASIN",    "label": "ASIN",         "width": "130px", "align": "left"},
-                    {"key": "Product", "label": "Product",      "width": "auto",  "align": "left"},
+                    {"key": "ASIN",    "label": "ASIN",         "width": "130px", "align": "left", "sticky": True},
+                    {"key": "Product", "label": "Product",      "width": "220px", "align": "left", "sticky": True},
                     {"key": "units",   "label": "Local Units",  "width": "120px", "align": "right"},
                     {"key": "updated", "label": "Last Updated", "width": "120px", "align": "right"},
                     {"key": "notes",   "label": "Notes",        "width": "200px", "align": "left"},
@@ -2658,8 +2512,8 @@ def render_tiktok_page(inventory_rows: list[dict]):
         components.html(
             _nyvos_table_html(
                 columns=[
-                    {"key": "ASIN",    "label": "ASIN",           "width": "130px", "align": "left"},
-                    {"key": "Product", "label": "Product",        "width": "auto",  "align": "left"},
+                    {"key": "ASIN",    "label": "ASIN",           "width": "130px", "align": "left", "sticky": True},
+                    {"key": "Product", "label": "Product",        "width": "220px", "align": "left", "sticky": True},
                     {"key": "units",   "label": "TikTok Units",   "width": "110px", "align": "right"},
                     {"key": "vreal",   "label": "Vel 30d Real",   "width": "100px", "align": "right"},
                     {"key": "sold30",  "label": "Sold 30d",       "width": "90px",  "align": "right"},
