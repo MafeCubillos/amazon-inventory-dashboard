@@ -152,8 +152,9 @@ section[data-testid="stSidebar"][aria-expanded="true"] {
     background-color: var(--black) !important;
     transform: translateX(0) !important;
     display: block !important;
-    min-width: 244px !important;
-    width: 21rem !important;
+    min-width: 180px !important;
+    width: 15rem !important;
+    max-width: 15rem !important;
     visibility: visible !important;
     opacity: 1 !important;
     pointer-events: all !important;
