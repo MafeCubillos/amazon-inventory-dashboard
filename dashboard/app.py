@@ -4783,18 +4783,49 @@ def render_pnl_view_page(rows: list[dict]):
 
     df = _pd.DataFrame(pnl_rows)
 
-    # Column config — highlight actuals vs projected
-    col_cfg = {"Línea": st.column_config.TextColumn("Línea", width="medium")}
+    # ── Nyvos HTML table (dark header, gold text, sticky Línea) ──
+    # Convert markdown bold + separators to inline HTML and rename month
+    # columns with past/future prefix.
+    def _line_html(v: str) -> str:
+        s = str(v)
+        if s.startswith("─"):
+            return '<span style="color:#CCC">────────────────</span>'
+        if s.startswith("**") and s.endswith("**"):
+            return f'<strong style="color:#111">{s[2:-2]}</strong>'
+        return f'<span style="color:#444;padding-left:12px">{s}</span>'
+
+    def _money_cell(v: str, is_past: bool) -> str:
+        if not v:
+            return "—"
+        col = "#111" if is_past else "#B88F3A"
+        return f'<span style="color:{col}">{v}</span>'
+
+    col_rename = {}
+    past_cols = set()
     for ym in months:
         is_past = bool(cutoff) and ym <= cutoff
         prefix = "✅ " if is_past else "📊 "
-        col_cfg[ym] = st.column_config.TextColumn(
-            prefix + ym, width="small",
-            help=("Actual (Sellerboard)" if is_past else f"Proyectado — scenario {scenario}"),
-        )
+        col_rename[ym] = prefix + ym
+        if is_past:
+            past_cols.add(prefix + ym)
 
-    st.dataframe(df, column_config=col_cfg, hide_index=True, use_container_width=True,
-                 height=min(60 + len(pnl_rows) * 35, 900))
+    df_view = df.rename(columns=col_rename)
+
+    widths = {"Línea": "220px"}
+    for new_name in col_rename.values():
+        widths[new_name] = "95px"
+    aligns = {c: "right" for c in col_rename.values()}
+    aligns["Línea"] = "left"
+
+    formatters = {"Línea": _line_html}
+    for new_name in col_rename.values():
+        is_past = new_name in past_cols
+        formatters[new_name] = (lambda v, _past=is_past: _money_cell(v, _past))
+
+    _render_nyvos_df_shared(
+        df_view, widths=widths, aligns=aligns, formatters=formatters,
+        sticky=["Línea"], max_height=900,
+    )
 
     # Summary KPIs
     all_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months)
