@@ -238,7 +238,7 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
                 lines["gross_profit"][ym] / lines["gmv_excl_vat"][ym]
                 if lines["gmv_excl_vat"][ym] else 0.0
             )
-            lines["tacos_cost"][ym]        = abs(float(a.get("ads_spend") or 0))
+            lines["advertising_cost"][ym]  = abs(float(a.get("ads_spend") or 0))
             lines["amazon_fees_total"][ym] = abs(float(a.get("amazon_fees") or 0))
             # Break Amazon Fees down from the raw Sellerboard columns so the
             # past-month rows show Fulfillment / Referral / Digital Svc /
@@ -253,6 +253,18 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
                                                     "FBAInboundTransportationProgramFee")
             lines["storage_cost"][ym]     = _rj_sum("FBAStorageFee", "FBALongTermStorageFee")
             lines["subscription"][ym]     = _rj_sum("Subscription")
+            # Ads breakdown — sum the Sellerboard per-channel columns
+            lines["ads_sponsored_products"][ym] = _rj_sum("SponsoredProducts")
+            lines["ads_sponsored_display"][ym]  = _rj_sum("SponsoredDisplay")
+            lines["ads_sponsored_brands"][ym]   = _rj_sum("SponsoredBrands", "SponsoredBrandsVideo")
+            # TACOS % = ads_spend / gmv_excl_vat
+            lines["tacos_pct"][ym] = (
+                lines["advertising_cost"][ym] / lines["gmv_excl_vat"][ym]
+                if lines["gmv_excl_vat"][ym] else 0.0
+            )
+            # TikTok placeholder lines (will be populated when TT Finance data is wired)
+            lines["tiktok_shipping"][ym] = 0.0
+            lines["tiktok_fees_ads"][ym] = 0.0
             lines["ebitda"][ym]            = float(a.get("net_profit") or 0)
             lines["ebitda_pct"][ym]        = (
                 lines["ebitda"][ym] / lines["gmv_excl_vat"][ym]
@@ -318,7 +330,14 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
             lines["product_cost"][ym]      = product_cost
             lines["gross_profit"][ym]      = gross_profit
             lines["gross_margin_pct"][ym]  = (gross_profit / sales_net) if sales_net else 0.0
-            lines["tacos_cost"][ym]        = tacos
+            lines["advertising_cost"][ym]  = tacos
+            lines["tacos_pct"][ym]         = (tacos / sales_net) if sales_net else 0.0
+            # Projections: no per-channel ads breakdown — leave empty so the UI shows "—"
+            lines["ads_sponsored_products"][ym] = 0.0
+            lines["ads_sponsored_display"][ym]  = 0.0
+            lines["ads_sponsored_brands"][ym]   = 0.0
+            lines["tiktok_shipping"][ym]        = 0.0
+            lines["tiktok_fees_ads"][ym]        = 0.0
             lines["fulfillment_cost"][ym]  = fulfillment
             lines["referral_cost"][ym]     = referral
             lines["digital_services"][ym]  = digital_svc
