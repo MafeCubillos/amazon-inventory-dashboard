@@ -4878,94 +4878,203 @@ def render_pnl_view_page(rows: list[dict]):
                 d[ym] = fmt.format(v)
         return d
 
-    pnl_rows = [
-        row("UNIT SALES",          "unit_sales",         fmt="{:,.0f}",   bold=True),
-        row("  Avg Consumer Price (incl IVA)", "price_avg", fmt="€{:,.2f}"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("GMV incl. VAT",       "gmv_incl_vat_calc",  fmt="€{:,.0f}",  bold=True),
-        row("  Promo / Vine",      "promo",              fmt="€{:,.0f}"),
-        row("  VAT",               "vat",                fmt="€{:,.0f}"),
-        row("GMV excl. VAT",       "gmv_excl_vat",       fmt="€{:,.0f}",  bold=True),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("Cost of Goods",       "product_cost",       fmt="€{:,.0f}"),
-        row("GROSS PROFIT",        "gross_profit",       fmt="€{:,.0f}",  bold=True),
-        row("  Gross Margin %",    "gross_margin_pct",   fmt="{:,.1f}%"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("Advertising cost",        "advertising_cost",       fmt="€{:,.0f}", bold=True),
-        row("  Sponsored Products",    "ads_sponsored_products", fmt="€{:,.0f}"),
-        row("  Sponsored Display",     "ads_sponsored_display",  fmt="€{:,.0f}"),
-        row("  Sponsored Brands",      "ads_sponsored_brands",   fmt="€{:,.0f}"),
-        row("  TACOS %",               "tacos_pct",              fmt="{:,.1f}%"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("Amazon Fees Total",   "amazon_fees_total",  fmt="€{:,.0f}", bold=True),
-        row("  Fulfillment",       "fulfillment_cost",   fmt="€{:,.0f}"),
-        row("  Referral",          "referral_cost",      fmt="€{:,.0f}"),
-        row("  Digital Services",  "digital_services",   fmt="€{:,.0f}"),
-        row("  Inbound Transp.",   "inbound_transp",     fmt="€{:,.0f}"),
-        row("  Storage",           "storage_cost",       fmt="€{:,.0f}"),
-        row("  Subscription",      "subscription",       fmt="€{:,.0f}"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("TikTok Shipping",         "tiktok_shipping",  fmt="€{:,.0f}"),
-        row("TikTok Fees & Ads",       "tiktok_fees_ads",  fmt="€{:,.0f}"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("Total SG&A",          "total_sga",          fmt="€{:,.0f}"),
-        row("Total MKT",           "total_mkt",          fmt="€{:,.0f}"),
-        row("Manual OPEX (hist.)", "manual_opex",        fmt="€{:,.0f}"),
-        {"Línea": "─" * 30, **{ym: "" for ym in months}},
-        row("EBITDA",              "ebitda",             fmt="€{:,.0f}",  bold=True),
-        row("  EBITDA Margin %",   "ebitda_pct",         fmt="{:,.1f}%"),
+    # ── P&L structure: sections with collapsible groups ────────
+    # type: "row"  → simple line
+    # type: "sep"  → visual separator
+    # type: "group"→ parent total with children (click to expand/collapse)
+    sections = [
+        {"type":"row",   "label":"UNIT SALES", "key":"unit_sales", "fmt":"{:,.0f}", "bold":True},
+        {"type":"row",   "label":"Avg Consumer Price (incl IVA)", "key":"price_avg", "fmt":"€{:,.2f}", "indent":1},
+        {"type":"sep"},
+        {"type":"row",   "label":"GMV incl. VAT", "key":"gmv_incl_vat_calc", "fmt":"€{:,.0f}", "bold":True},
+        {"type":"row",   "label":"Promo / Vine",  "key":"promo", "fmt":"€{:,.0f}", "indent":1},
+        {"type":"row",   "label":"VAT",           "key":"vat",   "fmt":"€{:,.0f}", "indent":1},
+        {"type":"row",   "label":"GMV excl. VAT", "key":"gmv_excl_vat", "fmt":"€{:,.0f}", "bold":True},
+        {"type":"sep"},
+        {"type":"row",   "label":"Cost of Goods", "key":"product_cost",    "fmt":"€{:,.0f}"},
+        {"type":"row",   "label":"GROSS PROFIT",  "key":"gross_profit",    "fmt":"€{:,.0f}", "bold":True},
+        {"type":"row",   "label":"Gross Margin %","key":"gross_margin_pct","fmt":"{:,.1f}%", "indent":1},
+        {"type":"sep"},
+        {"type":"group", "id":"ads", "label":"Advertising cost", "key":"advertising_cost",
+         "fmt":"€{:,.0f}", "bold":True, "children":[
+            {"label":"Sponsored Products", "key":"ads_sponsored_products", "fmt":"€{:,.0f}"},
+            {"label":"Sponsored Display",  "key":"ads_sponsored_display",  "fmt":"€{:,.0f}"},
+            {"label":"Sponsored Brands",   "key":"ads_sponsored_brands",   "fmt":"€{:,.0f}"},
+            {"label":"TACOS %",            "key":"tacos_pct",              "fmt":"{:,.1f}%"},
+        ]},
+        {"type":"sep"},
+        {"type":"group", "id":"fees", "label":"Amazon Fees Total", "key":"amazon_fees_total",
+         "fmt":"€{:,.0f}", "bold":True, "children":[
+            {"label":"Fulfillment",            "key":"fulfillment_cost",      "fmt":"€{:,.0f}"},
+            {"label":"Referral",               "key":"referral_cost",         "fmt":"€{:,.0f}"},
+            {"label":"Digital Services",       "key":"digital_services",      "fmt":"€{:,.0f}"},
+            {"label":"Inbound Transp.",        "key":"inbound_transp",        "fmt":"€{:,.0f}"},
+            {"label":"Storage",                "key":"storage_cost",          "fmt":"€{:,.0f}"},
+            {"label":"Subscription",           "key":"subscription",          "fmt":"€{:,.0f}"},
+            {"label":"Vine enrollment fee",    "key":"vine_enrollment_fee",   "fmt":"€{:,.0f}"},
+            {"label":"Vine fee",               "key":"vine_fee",              "fmt":"€{:,.0f}"},
+            {"label":"Deal participation fee", "key":"deal_participation",    "fmt":"€{:,.0f}"},
+            {"label":"Deal performance fee",   "key":"deal_performance",      "fmt":"€{:,.0f}"},
+            {"label":"FBA removal fee",        "key":"fba_removal_fee",       "fmt":"€{:,.0f}"},
+            {"label":"FBA disposal fee",       "key":"fba_disposal_fee",      "fmt":"€{:,.0f}"},
+            {"label":"Coupon performance fee", "key":"coupon_performance",    "fmt":"€{:,.0f}"},
+            {"label":"Coupon participation fee","key":"coupon_participation", "fmt":"€{:,.0f}"},
+            {"label":"EPR chargeback",         "key":"epr_chargeback",        "fmt":"€{:,.0f}"},
+            {"label":"Compensated clawback",   "key":"compensated_clawback",  "fmt":"€{:,.0f}"},
+            {"label":"Reversal reimbursement", "key":"reversal_reimbursement","fmt":"€{:,.0f}"},
+            {"label":"Warehouse lost",         "key":"warehouse_lost",        "fmt":"€{:,.0f}"},
+            {"label":"Warehouse damage",       "key":"warehouse_damage",      "fmt":"€{:,.0f}"},
+            {"label":"Micro Deposit",          "key":"micro_deposit",         "fmt":"€{:,.0f}"},
+            {"label":"Adjustment",             "key":"adjustment_fees",       "fmt":"€{:,.0f}"},
+        ]},
+        {"type":"sep"},
+        {"type":"row", "label":"TikTok Shipping",   "key":"tiktok_shipping", "fmt":"€{:,.0f}"},
+        {"type":"row", "label":"TikTok Fees & Ads", "key":"tiktok_fees_ads", "fmt":"€{:,.0f}"},
+        {"type":"sep"},
+        {"type":"row", "label":"Total SG&A",          "key":"total_sga",    "fmt":"€{:,.0f}"},
+        {"type":"row", "label":"Total MKT",           "key":"total_mkt",    "fmt":"€{:,.0f}"},
+        {"type":"row", "label":"Manual OPEX (hist.)", "key":"manual_opex",  "fmt":"€{:,.0f}"},
+        {"type":"sep"},
+        {"type":"row", "label":"EBITDA",         "key":"ebitda",     "fmt":"€{:,.0f}", "bold":True},
+        {"type":"row", "label":"EBITDA Margin %","key":"ebitda_pct", "fmt":"{:,.1f}%", "indent":1},
     ]
 
-    df = _pd.DataFrame(pnl_rows)
+    # ── Helpers ────────────────────────────────────────────────
+    def _fmt_val(v, fmt: str) -> str:
+        if v is None:
+            return ""
+        try:
+            if "%" in fmt:
+                return fmt.format(v * 100)
+            return fmt.format(v)
+        except Exception:
+            return ""
 
-    # ── Nyvos HTML table (dark header, gold text, sticky Línea) ──
-    # Convert markdown bold + separators to inline HTML and rename month
-    # columns with past/future prefix.
-    def _line_html(v: str) -> str:
-        s = str(v)
-        if s.startswith("─"):
-            return '<span style="color:#CCC">────────────────</span>'
-        if s.startswith("**") and s.endswith("**"):
-            return f'<strong style="color:#111">{s[2:-2]}</strong>'
-        return f'<span style="color:#444;padding-left:12px">{s}</span>'
-
-    def _money_cell(v: str, is_past: bool) -> str:
-        if not v:
-            return "—"
-        col = "#111" if is_past else "#B88F3A"
-        return f'<span style="color:{col}">{v}</span>'
-
-    col_rename = {}
-    past_cols = set()
-    for ym in months:
-        is_past = bool(cutoff) and ym <= cutoff
-        # Short MM/YY label (e.g. "11/25") instead of full "✅ 2025-11"
+    def _short_ym(ym: str) -> str:
         try:
             y, m = ym.split("-")
-            short = f"{m}/{y[2:]}"
+            return f"{m}/{y[2:]}"
         except Exception:
-            short = ym
-        col_rename[ym] = short
-        if is_past:
-            past_cols.add(short)
+            return ym
 
-    df_view = df.rename(columns=col_rename)
+    def _cell_html(key: str, ym: str, fmt: str) -> str:
+        v = lines.get(key, {}).get(ym)
+        txt = _fmt_val(v, fmt)
+        if not txt:
+            return '<span style="color:#CCC">—</span>'
+        is_past = bool(cutoff) and ym <= cutoff
+        col = "#111" if is_past else "#B88F3A"
+        return f'<span style="color:{col}">{txt}</span>'
 
-    widths = {"Línea": "220px"}
-    for new_name in col_rename.values():
-        widths[new_name] = "75px"
-    aligns = {c: "right" for c in col_rename.values()}
-    aligns["Línea"] = "left"
-
-    formatters = {"Línea": _line_html}
-    for new_name in col_rename.values():
-        is_past = new_name in past_cols
-        formatters[new_name] = (lambda v, _past=is_past: _money_cell(v, _past))
-
-    _render_nyvos_df_shared(
-        df_view, widths=widths, aligns=aligns, formatters=formatters,
-        sticky=["Línea"], max_height=1200,
+    # Build the HTML table
+    month_headers = "".join(
+        f'<th style="position:sticky;top:0;background:#111;color:#E8C879;'
+        f'padding:11px 8px;font-size:11.5px;font-weight:800;text-transform:uppercase;'
+        f'letter-spacing:.06em;text-align:right;white-space:nowrap;width:75px;'
+        f'box-shadow:0 1px 0 rgba(255,255,255,.08)">{_short_ym(ym)}</th>'
+        for ym in months
     )
+    linea_th = (
+        '<th style="position:sticky;top:0;left:0;background:#111;color:#E8C879;'
+        'padding:11px 10px;font-size:11.5px;font-weight:800;text-transform:uppercase;'
+        'letter-spacing:.08em;text-align:left;width:230px;z-index:20;'
+        'box-shadow:2px 0 4px -2px rgba(0,0,0,.25),0 1px 0 rgba(255,255,255,.08)">Línea</th>'
+    )
+
+    def _tr(label_html: str, cells: list[str], bg: str, extra_attrs: str = "",
+            tr_style: str = "") -> str:
+        tds = "".join(
+            f'<td style="padding:7px 8px;text-align:right;font-size:12px;'
+            f'color:#111;border-bottom:1px solid #EEE;white-space:nowrap;'
+            f'background:{bg}">{c}</td>' for c in cells
+        )
+        return (
+            f'<tr {extra_attrs} style="background:{bg};{tr_style}">'
+            f'<td style="padding:7px 10px;font-size:12.5px;color:#111;'
+            f'border-bottom:1px solid #EEE;white-space:nowrap;position:sticky;left:0;'
+            f'background:{bg};box-shadow:2px 0 4px -2px rgba(0,0,0,.08)">{label_html}</td>'
+            f'{tds}</tr>'
+        )
+
+    rows_html = []
+    i = 0
+    for sec in sections:
+        bg = "#FFFFFF" if i % 2 == 0 else "#FBFAF7"
+        if sec["type"] == "sep":
+            rows_html.append(_tr(
+                '<span style="color:#CCC">────────────</span>',
+                ['<span style="color:#CCC">·</span>'] * len(months),
+                bg="#F4F4F2"
+            ))
+            i += 1
+            continue
+        if sec["type"] == "row":
+            indent = sec.get("indent", 0)
+            pad = f"padding-left:{12 + indent*14}px;"
+            if sec.get("bold"):
+                label_html = f'<strong style="color:#111;{pad}">{sec["label"]}</strong>'
+            else:
+                label_html = f'<span style="color:#444;{pad}">{sec["label"]}</span>'
+            cells = [_cell_html(sec["key"], ym, sec["fmt"]) for ym in months]
+            rows_html.append(_tr(label_html, cells, bg=bg))
+            i += 1
+            continue
+        if sec["type"] == "group":
+            gid = sec["id"]
+            # Parent row — clickable, with ▶/▼ caret
+            caret_id = f"caret_{gid}"
+            label_html = (
+                f'<span onclick="pnlToggle(\'{gid}\')" '
+                f'style="cursor:pointer;user-select:none;color:#111">'
+                f'<span id="{caret_id}" style="display:inline-block;width:12px;color:#888">▶</span>'
+                f'<strong>{sec["label"]}</strong></span>'
+            )
+            cells = [_cell_html(sec["key"], ym, sec["fmt"]) for ym in months]
+            rows_html.append(_tr(label_html, cells, bg=bg))
+            i += 1
+            # Children — initially hidden
+            for child in sec["children"]:
+                cbg = "#FFFFFF" if i % 2 == 0 else "#FBFAF7"
+                clabel = (
+                    f'<span style="color:#666;padding-left:30px;font-size:11.5px">'
+                    f'{child["label"]}</span>'
+                )
+                ccells = [_cell_html(child["key"], ym, child["fmt"]) for ym in months]
+                rows_html.append(_tr(
+                    clabel, ccells, bg=cbg,
+                    extra_attrs=f'class="pnl-child-{gid}" data-group="{gid}"',
+                    tr_style="display:none",
+                ))
+                i += 1
+
+    js = """
+<script>
+function pnlToggle(gid) {
+    var rows = document.getElementsByClassName('pnl-child-' + gid);
+    var caret = document.getElementById('caret_' + gid);
+    if (!rows.length) return;
+    var show = rows[0].style.display === 'none';
+    for (var i = 0; i < rows.length; i++) {
+        rows[i].style.display = show ? '' : 'none';
+    }
+    if (caret) caret.innerText = show ? '▼' : '▶';
+}
+</script>
+"""
+
+    table_html = (
+        js +
+        '<div style="overflow:auto;max-height:1200px;border-radius:10px;'
+        'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);'
+        'margin-bottom:12px">'
+        '<table style="width:100%;min-width:100%;border-collapse:separate;'
+        'border-spacing:0;table-layout:auto;font-family:Inter,sans-serif">'
+        f'<thead><tr>{linea_th}{month_headers}</tr></thead>'
+        f'<tbody>{"".join(rows_html)}</tbody></table></div>'
+    )
+
+    components.html(table_html, height=min(1200, 80 + 30 * (len(sections) + 10)),
+                    scrolling=True)
 
     # Summary KPIs
     all_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months)
