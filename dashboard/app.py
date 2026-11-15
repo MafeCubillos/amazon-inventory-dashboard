@@ -3222,6 +3222,81 @@ def render_reorder_planner(rows: list[dict]):
             key="reorder_editor",
         )
 
+    # ── Timeline view (visual under the table) ─────────────────
+    with st.expander("📅 Timeline view — when each product needs attention", expanded=True):
+        st.caption("Horizontal view of the next 180 days per ASIN. "
+                   "📦 = place order · 🚚 = PO arrives · ⚠️ = projected stockout.")
+        HORIZON_DAYS = 180
+        bar_items = []
+        for n in needs:
+            d_order   = max(0, int(n["Days to order"]))
+            d_arrival = d_order + int(n["_lead"])
+            d_stock   = d_arrival  # stockout ≈ arrival (lead is exactly the slack)
+            bar_items.append({
+                "name":     n["Product"],
+                "d_order":  d_order,
+                "d_arrival": d_arrival,
+                "d_stock":  d_stock,
+                "alert":    n["Alert"],
+                "qty":      int(n["Reorder units"]),
+            })
+
+        today_lbl = today.strftime("%d %b")
+        p30 = today + _td(days=30)
+        p60 = today + _td(days=60)
+        p90 = today + _td(days=90)
+        p120 = today + _td(days=120)
+        p150 = today + _td(days=150)
+        p180 = today + _td(days=HORIZON_DAYS)
+
+        def _pct(d: int) -> float:
+            return 100.0 * min(max(d, 0), HORIZON_DAYS) / HORIZON_DAYS
+
+        def _alert_color(a: str) -> str:
+            if "🔴" in a: return NYVOS_STATUS["critical"]["dot"]
+            if "🟡" in a: return NYVOS_STATUS["warning"]["dot"]
+            if "🟠" in a: return "#F97316"
+            if "🔵" in a: return "#3B82F6"
+            return NYVOS_STATUS["ok"]["dot"]
+
+        tl_html = [
+            '<div style="background:#FFF;border:1px solid #E8E8E8;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)">',
+            '<div style="position:relative;height:28px;margin-left:200px;margin-right:12px;border-bottom:1px solid #DDD">',
+        ]
+        for lbl, d in [(today_lbl,0), (p30.strftime("%d %b"),30), (p60.strftime("%d %b"),60),
+                       (p90.strftime("%d %b"),90), (p120.strftime("%d %b"),120),
+                       (p150.strftime("%d %b"),150), (p180.strftime("%d %b"),180)]:
+            left = _pct(d)
+            tl_html.append(
+                f'<div style="position:absolute;left:{left}%;top:0;transform:translateX(-50%);'
+                f'font-size:10px;color:#888;white-space:nowrap">{lbl}</div>'
+                f'<div style="position:absolute;left:{left}%;top:18px;width:1px;height:10px;background:#CCC"></div>'
+            )
+        tl_html.append('</div>')
+
+        for it in bar_items:
+            color = _alert_color(it["alert"])
+            lo = _pct(it["d_order"])
+            hi = _pct(it["d_arrival"])
+            tl_html.append(
+                f'<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #F0F0F0">'
+                f'  <div style="width:200px;font-size:12px;color:#111;font-weight:600;'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{it["name"]}">{it["name"]}</div>'
+                f'  <div style="flex:1;position:relative;height:22px;background:#F7F7F3;border-radius:11px;margin-right:12px">'
+                f'    <div style="position:absolute;left:{lo}%;top:0;width:{max(hi-lo,0.5)}%;height:100%;'
+                f'background:linear-gradient(90deg,{color} 0%,{color}88 100%);border-radius:11px;opacity:.85"></div>'
+                f'    <div style="position:absolute;left:{lo}%;top:50%;transform:translate(-50%,-50%);'
+                f'font-size:11px;line-height:1" title="Order by day {it["d_order"]}">📦</div>'
+                f'    <div style="position:absolute;left:{hi}%;top:50%;transform:translate(-50%,-50%);'
+                f'font-size:11px;line-height:1" title="Arrival day {it["d_arrival"]}">🚚</div>'
+                f'    <div style="position:absolute;right:-78px;top:50%;transform:translateY(-50%);'
+                f'font-size:11px;color:{color};font-weight:700;white-space:nowrap">{it["qty"]:,} u</div>'
+                f'  </div>'
+                f'</div>'
+            )
+        tl_html.append('</div>')
+        st.markdown("".join(tl_html), unsafe_allow_html=True)
+
     # ── Shipment plan Excel ─────────────────────────────────────
     ship_rows = []
     for i, row in edited.iterrows():
