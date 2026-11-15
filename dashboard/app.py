@@ -5062,19 +5062,19 @@ function pnlToggle(gid) {
 </script>
 """
 
+    # Iframe height = fixed visible area; inner div scrolls so sticky header works
+    VISIBLE_H = 700
     table_html = (
         js +
-        '<div style="overflow:auto;max-height:1200px;border-radius:10px;'
-        'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06);'
-        'margin-bottom:12px">'
+        f'<div style="overflow:auto;height:{VISIBLE_H}px;border-radius:10px;'
+        'border:1px solid #E8E8E8;background:white;box-shadow:0 1px 4px rgba(0,0,0,.06)">'
         '<table style="width:100%;min-width:100%;border-collapse:separate;'
         'border-spacing:0;table-layout:auto;font-family:Inter,sans-serif">'
         f'<thead><tr>{linea_th}{month_headers}</tr></thead>'
         f'<tbody>{"".join(rows_html)}</tbody></table></div>'
     )
 
-    components.html(table_html, height=min(1200, 80 + 30 * (len(sections) + 10)),
-                    scrolling=True)
+    components.html(table_html, height=VISIBLE_H + 20, scrolling=False)
 
     # Summary KPIs
     all_sales = sum(lines.get("gmv_excl_vat", {}).get(ym, 0) for ym in months)
