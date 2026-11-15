@@ -238,8 +238,7 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
                 lines["gross_profit"][ym] / lines["gmv_excl_vat"][ym]
                 if lines["gmv_excl_vat"][ym] else 0.0
             )
-            lines["advertising_cost"][ym]  = abs(float(a.get("ads_spend") or 0))
-            lines["amazon_fees_total"][ym] = abs(float(a.get("amazon_fees") or 0))
+            # amazon_fees_total will be recomputed as sum of sub-lines below
             # Break Amazon Fees down from the raw Sellerboard columns so the
             # past-month rows show Fulfillment / Referral / Digital Svc /
             # Inbound / Storage / Subscription detail just like projections.
@@ -269,10 +268,27 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
             lines["warehouse_damage"][ym]    = _rj_sum("WAREHOUSE_DAMAGE")
             lines["micro_deposit"][ym]       = _rj_sum("MicroDeposit")
             lines["adjustment_fees"][ym]     = _rj_sum("Adjustment", "AdjustmentFBAPerUnitFulfillmentFee")
+            # Amazon fees total = sum of all sub-line amounts so parent == sum of children
+            lines["amazon_fees_total"][ym] = sum(lines[k][ym] for k in (
+                "fulfillment_cost", "referral_cost", "digital_services",
+                "inbound_transp", "storage_cost", "subscription",
+                "vine_enrollment_fee", "vine_fee", "deal_participation",
+                "deal_performance", "fba_removal_fee", "fba_disposal_fee",
+                "coupon_performance", "coupon_participation", "epr_chargeback",
+                "compensated_clawback", "reversal_reimbursement",
+                "warehouse_lost", "warehouse_damage", "micro_deposit",
+                "adjustment_fees",
+            ))
             # Ads breakdown — sum the Sellerboard per-channel columns
             lines["ads_sponsored_products"][ym] = _rj_sum("SponsoredProducts")
             lines["ads_sponsored_display"][ym]  = _rj_sum("SponsoredDisplay")
             lines["ads_sponsored_brands"][ym]   = _rj_sum("SponsoredBrands", "SponsoredBrandsVideo")
+            # Advertising cost = sum of sub-lines so parent == sum of children
+            lines["advertising_cost"][ym] = (
+                lines["ads_sponsored_products"][ym]
+                + lines["ads_sponsored_display"][ym]
+                + lines["ads_sponsored_brands"][ym]
+            )
             # TACOS % = ads_spend / gmv_excl_vat
             lines["tacos_pct"][ym] = (
                 lines["advertising_cost"][ym] / lines["gmv_excl_vat"][ym]
