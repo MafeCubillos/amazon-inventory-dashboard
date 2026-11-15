@@ -4931,16 +4931,21 @@ def render_pnl_view_page(rows: list[dict]):
     past_cols = set()
     for ym in months:
         is_past = bool(cutoff) and ym <= cutoff
-        prefix = "✅ " if is_past else "📊 "
-        col_rename[ym] = prefix + ym
+        # Short MM/YY label (e.g. "11/25") instead of full "✅ 2025-11"
+        try:
+            y, m = ym.split("-")
+            short = f"{m}/{y[2:]}"
+        except Exception:
+            short = ym
+        col_rename[ym] = short
         if is_past:
-            past_cols.add(prefix + ym)
+            past_cols.add(short)
 
     df_view = df.rename(columns=col_rename)
 
     widths = {"Línea": "220px"}
     for new_name in col_rename.values():
-        widths[new_name] = "95px"
+        widths[new_name] = "75px"
     aligns = {c: "right" for c in col_rename.values()}
     aligns["Línea"] = "left"
 
