@@ -240,6 +240,19 @@ def compute_pnl(scenario: Optional[str] = None, months_back: int = 12) -> dict:
             )
             lines["tacos_cost"][ym]        = abs(float(a.get("ads_spend") or 0))
             lines["amazon_fees_total"][ym] = abs(float(a.get("amazon_fees") or 0))
+            # Break Amazon Fees down from the raw Sellerboard columns so the
+            # past-month rows show Fulfillment / Referral / Digital Svc /
+            # Inbound / Storage / Subscription detail just like projections.
+            _rj = a.get("raw_json") or {}
+            def _rj_sum(*cols) -> float:
+                return sum(abs(float(_rj.get(c) or 0)) for c in cols)
+            lines["fulfillment_cost"][ym] = _rj_sum("FBAPerUnitFulfillmentFee")
+            lines["referral_cost"][ym]    = _rj_sum("Commission", "GiftWrap", "Shipping")
+            lines["digital_services"][ym] = _rj_sum("DigitalServicesFee", "DigitalServicesFeeFBA")
+            lines["inbound_transp"][ym]   = _rj_sum("FBAInboundTransportationFee",
+                                                    "FBAInboundTransportationProgramFee")
+            lines["storage_cost"][ym]     = _rj_sum("FBAStorageFee", "FBALongTermStorageFee")
+            lines["subscription"][ym]     = _rj_sum("Subscription")
             lines["ebitda"][ym]            = float(a.get("net_profit") or 0)
             lines["ebitda_pct"][ym]        = (
                 lines["ebitda"][ym] / lines["gmv_excl_vat"][ym]
